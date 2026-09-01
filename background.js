@@ -129,8 +129,17 @@ function fpcPrepare(opts) {
     }
   }
   window.__fpc = state;
+  let loadMs = 0;
+  try {
+    const nav = performance.getEntriesByType && performance.getEntriesByType("navigation")[0];
+    if (nav && nav.loadEventEnd > 0) loadMs = Math.round(nav.loadEventEnd);
+    else if (performance.timing) {
+      const t = performance.timing;
+      loadMs = Math.max(0, (t.loadEventEnd || t.domContentLoadedEventEnd || Date.now()) - t.navigationStart);
+    }
+  } catch (_) {}
   return { clientW, clientH, fullW, fullH, dpr, scrollbarLeft,
-    ua: navigator.userAgent, vw: window.innerWidth, vh: window.innerHeight };
+    ua: navigator.userAgent, vw: window.innerWidth, vh: window.innerHeight, loadMs };
 }
 
 function fpcScrollTo(x, y) {
@@ -193,6 +202,15 @@ function fpcRestore() {
       if (val) el.style.setProperty("visibility", val, prio || "");
     }
   }
+  if (st.sbStyle) { try { st.sbStyle.remove(); } catch (_) {} }
+  if (st.el) {
+    // Inner-container capture — restore the container's own scroll + behaviour.
+    try {
+      st.el.style.scrollBehavior = st.prevBehavior || "";
+      st.el.scrollTop = st.prevTop;
+      st.el.scrollLeft = st.prevLeft;
+    } catch (_) {}
+  }
   document.documentElement.style.scrollBehavior = st.prevScrollBehavior || "";
   window.scrollTo(st.prevX, st.prevY);
   delete window.__fpc;
@@ -228,12 +246,128 @@ async function fpcPreScroll() {
 }
 
 function fpcVisibleMeta() {
+  let loadMs = 0;
+  try {
+    const nav = performance.getEntriesByType && performance.getEntriesByType("navigation")[0];
+    if (nav && nav.loadEventEnd > 0) loadMs = Math.round(nav.loadEventEnd);
+    else if (performance.timing) {
+      const t = performance.timing;
+      loadMs = Math.max(0, (t.loadEventEnd || t.domContentLoadedEventEnd || Date.now()) - t.navigationStart);
+    }
+  } catch (_) {}
   return {
     clientW: document.documentElement.clientWidth,
     clientH: document.documentElement.clientHeight,
     dpr: window.devicePixelRatio || 1,
-    ua: navigator.userAgent, vw: window.innerWidth, vh: window.innerHeight
+    ua: navigator.userAgent, vw: window.innerWidth, vh: window.innerHeight, loadMs
   };
+}
+
+// Inner-scroll capture: when the window itself doesn't scroll but a large element
+// (overflow:auto/scroll) holds the content — common in SPAs / ERP dashboards / data
+// tables — capture THAT container. Returns metrics in a virtual page frame where the
+// container's content spans 0..scrollHeight, or null if the page scrolls normally or
+// no suitable container is found (so the caller falls back to the window path).
+function fpcPrepareContainer(opts) {
+  const de = document.documentElement, body = document.body;
+  if (!body) return null;
+  const winOverflow = Math.max(de.scrollHeight, body.scrollHeight) - window.innerHeight;
+  if (winOverflow > 4) return null;              // the page scrolls normally → window path
+  const minOverflow = (opts && opts.minOverflow) || 200;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  // Pick the largest vertically-scrollable container: hidden-content × visible-area.
+  let el = null, best = 0;
+  const all = body.getElementsByTagName("*");
+  for (let i = 0; i < all.length; i++) {
+    const n = all[i];
+    const over = n.scrollHeight - n.clientHeight;
+    if (over < minOverflow) continue;            // cheap layout read first; skip most nodes
+    let cs; try { cs = getComputedStyle(n); } catch (_) { continue; }
+    const oy = cs.overflowY;
+    if (oy !== "auto" && oy !== "scroll" && oy !== "overlay") continue;
+    if (cs.visibility === "hidden" || cs.display === "none") continue;
+    const r = n.getBoundingClientRect();
+    const visW = Math.min(r.right, vw) - Math.max(r.left, 0);
+    const visH = Math.min(r.bottom, vh) - Math.max(r.top, 0);
+    if (visW < 100 || visH < 100) continue;
+    const score = over * Math.min(1, (visW * visH) / (vw * vh));
+    if (score > best) { best = score; el = n; }
+  }
+  if (!el) return null;
+  // Dominance guard: only hand off to the container path when the chosen scroller
+  // actually IS the page's main content area — i.e. it fills most of the viewport.
+  // Otherwise a small scroll widget (a reviews box, activity feed, T&C panel) on an
+  // otherwise one-screen page would hijack "full page" and capture only that widget.
+  {
+    const dr = el.getBoundingClientRect();
+    const dvisW = Math.min(dr.right, vw) - Math.max(dr.left, 0);
+    const dvisH = Math.min(dr.bottom, vh) - Math.max(dr.top, 0);
+    if (dvisW < vw * 0.6 || dvisH < vh * 0.6) return null;   // not dominant → normal window capture
+  }
+  const dpr = window.devicePixelRatio || 1;
+  // Hide scrollbars so the container's own thumb/track isn't captured, THEN measure
+  // (so all measurements reflect the no-scrollbar layout and tiles line up).
+  const sbStyle = document.createElement("style");
+  sbStyle.textContent = "*::-webkit-scrollbar{display:none !important}*{scrollbar-width:none !important}";
+  (document.head || de).appendChild(sbStyle);
+  const prevBehavior = el.style.scrollBehavior;
+  el.style.scrollBehavior = "auto";
+  const prevTop = el.scrollTop, prevLeft = el.scrollLeft;
+  el.scrollTop = 0; el.scrollLeft = 0;
+  const r = el.getBoundingClientRect();
+  const cx = Math.max(0, r.left), cy = Math.max(0, r.top);
+  const cw = Math.max(1, Math.min(vw, r.right) - cx);
+  const ch = Math.max(1, Math.min(vh, r.bottom) - cy);
+  const state = {
+    el, prevTop, prevLeft, prevBehavior,
+    prevX: window.scrollX, prevY: window.scrollY,
+    prevScrollBehavior: de.style.scrollBehavior,
+    sbStyle, fixed: [], saved: null, hidden: false
+  };
+  if (opts && opts.hideFixed) {
+    for (let i = 0; i < all.length; i++) {
+      const n = all[i];
+      // Exclude the container AND its ancestors: hiding a fixed/sticky shell that
+      // wraps the scroll container (the canonical SPA/ERP layout) would hide the
+      // container too via inherited visibility, blanking every tile after the first.
+      if (n.contains(el)) continue;
+      let pos; try { pos = getComputedStyle(n).position; } catch (_) { continue; }
+      if (pos === "fixed" || pos === "sticky") state.fixed.push(n);
+    }
+  }
+  window.__fpc = state;
+  let loadMs = 0;
+  try {
+    const nav = performance.getEntriesByType && performance.getEntriesByType("navigation")[0];
+    if (nav && nav.loadEventEnd > 0) loadMs = Math.round(nav.loadEventEnd);
+    else if (performance.timing) {
+      const t = performance.timing;
+      loadMs = Math.max(0, (t.loadEventEnd || t.domContentLoadedEventEnd || Date.now()) - t.navigationStart);
+    }
+  } catch (_) {}
+  // Clamp the reported content size to what a viewport-sized tile can actually reach.
+  // If the container's border box overflows the viewport (visible slice ch/cw smaller
+  // than its clientHeight/clientWidth), scroll positions past the real max clamp, so the
+  // below-fold / right-of-fold slice is uncapturable — sizing the canvas to the FULL
+  // scroll extent would leave a blank band. reach = maxScroll + visible slice.
+  const reachH = Math.max(0, el.scrollHeight - el.clientHeight) + ch;
+  const reachW = Math.max(0, el.scrollWidth - el.clientWidth) + cw;
+  return {
+    clientW: cw, clientH: ch,
+    fullW: Math.max(cw, Math.min(el.scrollWidth, reachW)),   // >cw → horizontal tiling (wide ERP tables)
+    fullH: Math.max(ch, Math.min(el.scrollHeight, reachH)),
+    dpr, scrollbarLeft: false,
+    containerDX: Math.round(cx * dpr), containerDY: Math.round(cy * dpr),
+    ua: navigator.userAgent, vw, vh, loadMs
+  };
+}
+
+function fpcScrollContainer(x, y) {
+  const st = window.__fpc;
+  if (!st || !st.el) return { x: 0, y: 0 };
+  st.el.scrollLeft = x;
+  st.el.scrollTop = y;
+  return { x: st.el.scrollLeft, y: st.el.scrollTop };
 }
 
 // Injected: draw a selection overlay and resolve with the chosen rectangle in PAGE
@@ -478,6 +612,9 @@ function clampRegion(sel, m) {
 async function tiledCapture(o) {
   const { exec, windowId, tab, jobId, settings, metrics, region, mode } = o;
   const { clientW, clientH, fullW, fullH, dpr, scrollbarLeft } = metrics;
+  const scrollFn = o.scrollFn || fpcScrollTo;         // window scroll by default; container-scroll for inner capture
+  const smoothFn = o.smoothFn || fpcSmoothScrollTo;
+  const containerOffset = o.containerOffset || null;  // {dx,dy} device-px offset of the container within each viewport tile
   const xs = tilePositions(region.x, region.w, clientW, fullW);
   const ys = tilePositions(region.y, region.h, clientH, fullH);
   const total = xs.length * ys.length;
@@ -487,10 +624,10 @@ async function tiledCapture(o) {
   let count = 0, rowIndex = 0;
   for (const y of ys) {
     for (const x of xs) {
-      const smooth = settings.smoothScroll && multi;
+      const smooth = !o.forceInstant && settings.smoothScroll && multi;
       const pos = smooth
-        ? await exec(fpcSmoothScrollTo, [x, y, SMOOTH_MS])
-        : await exec(fpcScrollTo, [x, y]);
+        ? await exec(smoothFn, [x, y, SMOOTH_MS])
+        : await exec(scrollFn, [x, y]);
       // Short settle when gliding — the glide already ends on the final frame, so only
       // a couple of frames are needed for it to paint. Keeps the pause between glides
       // brief so the stop-and-go is barely noticeable.
@@ -514,7 +651,8 @@ async function tiledCapture(o) {
     meta: {
       mode, title: tab.title || "screenshot", url: tab.url,
       dpr, clientW, clientH, fullW, fullH, scrollbarLeft: !!scrollbarLeft, region,
-      env: { ua: metrics.ua, vw: metrics.vw, vh: metrics.vh, dpr }
+      containerOffset,
+      env: { ua: metrics.ua, vw: metrics.vw, vh: metrics.vh, dpr, loadMs: metrics.loadMs }
     },
     tiles
   });
@@ -560,7 +698,7 @@ async function runCapture(tab, mode, delay) {
       setBadge("");
       return openResult(jobId, {
         meta: { mode: "visible", title: tab.title || "screenshot", url: tab.url, dpr: m.dpr,
-          env: m.ua ? { ua: m.ua, vw: m.vw, vh: m.vh, dpr: m.dpr } : undefined },
+          env: m.ua ? { ua: m.ua, vw: m.vw, vh: m.vh, dpr: m.dpr, loadMs: m.loadMs } : undefined },
         tiles: [{ dataUrl, x: 0, y: 0 }]
       });
     }
@@ -594,7 +732,7 @@ async function runCapture(tab, mode, delay) {
             mode: "region", title: tab.title || "screenshot", url: tab.url, dpr: sel.dpr,
             clientW: sel.vw, clientH: sel.vh, fullW: sel.vw, fullH: sel.vh, scrollbarLeft: false,
             region: { x: sel.x, y: sel.y, w: sel.w, h: sel.h },
-            env: m.ua ? { ua: m.ua, vw: m.vw, vh: m.vh, dpr: m.dpr } : undefined
+            env: m.ua ? { ua: m.ua, vw: m.vw, vh: m.vh, dpr: m.dpr, loadMs: m.loadMs } : undefined
           },
           tiles: [{ dataUrl, x: 0, y: 0 }]
         });
@@ -608,6 +746,18 @@ async function runCapture(tab, mode, delay) {
     // ---- full page ----
     if (settings.preScroll) {
       try { await exec(fpcPreScroll); } catch (_) {}
+    }
+    // If the window itself doesn't scroll but the content lives in an inner
+    // overflow:auto container (SPA / ERP dashboard / data table), capture that
+    // container. Returns null on normal pages, so we fall through to the window path.
+    const cm = await exec(fpcPrepareContainer, [{ hideFixed: settings.hideFixed }]);
+    if (cm) {
+      const cregion = { x: 0, y: 0, w: cm.fullW, h: cm.fullH };
+      return await tiledCapture({
+        exec, windowId, tab, jobId, settings, metrics: cm, region: cregion, mode: "full",
+        scrollFn: fpcScrollContainer, forceInstant: true,
+        containerOffset: { dx: cm.containerDX, dy: cm.containerDY }
+      });
     }
     const metrics = await exec(fpcPrepare, [{ hideFixed: settings.hideFixed }]);
     if (!metrics) throw new Error("Could not read the page. Reload the page and try again.");
