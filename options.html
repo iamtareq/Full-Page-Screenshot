@@ -1,0 +1,206 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Full Page Capture — Settings</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --panel:#ffffff; --border:#e6e8ef; --text:#0f172a; --muted:#6b7280;
+      --field:#ffffff; --field-border:#d7dbe4; --accent:#6366f1;
+      --accent-grad:linear-gradient(135deg,#6366f1,#8b5cf6); --ring:rgba(99,102,241,.35);
+      --shadow: 0 6px 24px rgba(16,24,40,.08), 0 1px 3px rgba(16,24,40,.06);
+      --bg1:#eef1f6; --bg2:#e6e9f1;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --panel:#1a2030; --border:#2b3242; --text:#e8eaf1; --muted:#94a0b4;
+        --field:#232a3b; --field-border:#3a4256; --bg1:#10141d; --bg2:#0b0e15;
+        --shadow: 0 8px 28px rgba(0,0,0,.45); }
+    }
+    * { box-sizing: border-box; }
+    body {
+      font: 14.5px/1.55 -apple-system, system-ui, "Segoe UI", Roboto, Arial, sans-serif;
+      max-width: 660px; margin: 0 auto; padding: 40px 24px 72px; color: var(--text);
+      background:
+        radial-gradient(900px 400px at 10% -10%, rgba(99,102,241,.10), transparent 60%),
+        radial-gradient(700px 350px at 100% 0%, rgba(139,92,246,.08), transparent 55%),
+        linear-gradient(180deg, var(--bg1), var(--bg2));
+      -webkit-font-smoothing: antialiased;
+    }
+    h1 { font-size: 23px; font-weight: 800; letter-spacing: .2px; display:flex; align-items:center; gap:11px; margin: 0 0 4px; }
+    h1 img { width: 30px; height: 30px; border-radius: 8px; box-shadow: var(--shadow); }
+    .card {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+      padding: 4px 22px; margin-top: 16px; box-shadow: var(--shadow);
+    }
+    .row {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 20px; padding: 16px 0; border-bottom: 1px solid var(--border);
+    }
+    .row:last-child { border-bottom: none; }
+    .row .label { font-weight: 700; font-size: 14px; }
+    .row .muted { font-size: 12.5px; font-weight: 400; margin-top: 3px; }
+    .muted { color: var(--muted); }
+    ol { margin: 8px 0 0; padding-left: 20px; } ol li { margin: 4px 0; }
+    select, input[type=text] {
+      padding: 9px 12px; border: 1px solid var(--field-border); border-radius: 9px;
+      font: inherit; min-width: 150px; background: var(--field); color: var(--text);
+      transition: border-color .12s, box-shadow .12s;
+    }
+    select:focus, input[type=text]:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+    input[type=text] { min-width: 240px; }
+    input[type=range] { width: 160px; accent-color: var(--accent); }
+    .switch { position: relative; width: 46px; height: 26px; flex: 0 0 auto; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider { position:absolute; inset:0; background:#cbd5e1; border-radius: 999px; cursor:pointer; transition: .2s; }
+    .slider::before { content:""; position:absolute; width:20px; height:20px; left:3px; top:3px; background:#fff; border-radius:50%; transition:.2s; box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+    @media (prefers-color-scheme: dark) { .slider { background:#3a4256; } }
+    .switch input:checked + .slider { background: var(--accent); }
+    .switch input:checked + .slider::before { transform: translateX(20px); }
+    .actions { margin-top: 24px; display:flex; align-items:center; gap:14px; }
+    button.save {
+      background: var(--accent-grad); color:#fff; border:0; padding: 12px 26px; border-radius: 11px;
+      font-weight:750; font-size:14px; cursor:pointer; box-shadow: 0 6px 18px var(--ring);
+      transition: transform .12s, box-shadow .12s, filter .12s;
+    }
+    button.save:hover { transform: translateY(-1px); filter: brightness(1.05); box-shadow: 0 10px 26px var(--ring); }
+    button.save:active { transform: translateY(0); }
+    .status { color:#16a34a; font-weight:700; font-size:13px; opacity:0; transform: translateX(-6px); transition:opacity .2s, transform .2s; }
+    @media (prefers-color-scheme: dark) { .status { color:#4ade80; } }
+    .status.show { opacity:1; transform: none; }
+    code { background: color-mix(in srgb, var(--accent) 14%, transparent); color: color-mix(in srgb, var(--accent) 60%, var(--text));
+      padding: 1.5px 6px; border-radius: 5px; font-size: 12px; font-family: ui-monospace, monospace; }
+  </style>
+</head>
+<body>
+  <h1><img src="icons/icon48.png" alt="" /> Settings</h1>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <div class="label">Default export format</div>
+        <div class="muted">Used by the one-click download button in the editor.</div>
+      </div>
+      <select id="format">
+        <option value="png">PNG (lossless)</option>
+        <option value="jpg">JPG (smaller)</option>
+        <option value="pdf">PDF</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="label">JPG / PDF quality</div>
+        <div class="muted">Higher = better quality, larger file. <span id="qval">92%</span></div>
+      </div>
+      <input type="range" id="jpegQuality" min="0.4" max="1" step="0.01" />
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="label">Render delay per section</div>
+        <div class="muted">Extra wait after each scroll so content settles. <span id="dval">130 ms</span></div>
+      </div>
+      <input type="range" id="tileDelay" min="0" max="800" step="10" />
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="label">Pre-scroll to load lazy images</div>
+        <div class="muted">Only needed for pages with lazy-loaded images. Adds an extra smooth scroll pass before capturing. Off by default (most pages, incl. reports, don't need it).</div>
+      </div>
+      <label class="switch"><input type="checkbox" id="preScroll" /><span class="slider"></span></label>
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="label">Smooth scroll animation</div>
+        <div class="muted">Glide smoothly between sections while capturing (no extra time).</div>
+      </div>
+      <label class="switch"><input type="checkbox" id="smoothScroll" /><span class="slider"></span></label>
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="label">Add URL &amp; time bar</div>
+        <div class="muted">Stamp a bar with the page URL and capture date/time on top of the screenshot (great for bug reports). Toggle per-capture in the editor.</div>
+      </div>
+      <label class="switch"><input type="checkbox" id="infoBar" /><span class="slider"></span></label>
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="label">Include environment info in the bar</div>
+        <div class="muted">Adds a second line: Browser · OS · Viewport · DPR — auto-filled from the captured page. Very handy for bug reports.</div>
+      </div>
+      <label class="switch"><input type="checkbox" id="envBar" /><span class="slider"></span></label>
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="label">Hide sticky / fixed elements</div>
+        <div class="muted">Prevents floating headers &amp; cookie bars repeating down the page.</div>
+      </div>
+      <label class="switch"><input type="checkbox" id="hideFixed" /><span class="slider"></span></label>
+    </div>
+
+    <div class="row">
+      <div>
+        <div class="label">File name template</div>
+        <div class="muted">Tokens: <code>{title}</code> <code>{date}</code> <code>{time}</code> <code>{host}</code></div>
+        <div class="muted" id="fnamePreview" style="margin-top:5px;"></div>
+      </div>
+      <input type="text" id="filenameTemplate" />
+    </div>
+  </div>
+
+  <h1 style="font-size:19px;margin-top:30px;">☁️ Send to Google Drive</h1>
+  <div class="card">
+    <div class="row" style="display:block;">
+      <div class="muted" style="line-height:1.7;">
+        One-time setup (so the extension can upload to <b>your</b> Drive):
+        <ol style="margin:8px 0 0; padding-left:20px;">
+          <li>Go to <code>console.cloud.google.com</code> → create/select a project.</li>
+          <li><b>APIs &amp; Services → Library</b> → enable <b>Google Drive API</b>.</li>
+          <li><b>APIs &amp; Services → OAuth consent screen</b> → set it up (External, add yourself as a Test user).</li>
+          <li><b>Credentials → Create Credentials → OAuth client ID → Web application</b>.</li>
+          <li>Under <b>Authorized redirect URIs</b>, add exactly this:
+            <div style="margin:6px 0;"><code id="redirectUri" style="user-select:all;word-break:break-all;">…</code></div>
+          </li>
+          <li>Copy the generated <b>Client ID</b> and paste it below. Paste your target Drive <b>folder</b> (URL or ID) too.</li>
+        </ol>
+        <p style="margin:10px 0 0;">On first use Google shows a consent screen asking for Drive access (needed to place files in your chosen folder), and — because your app is unverified/in testing — an <b>“unverified app”</b> warning: click <b>Advanced → Go to (app) (unsafe)</b> to proceed. This is your own app; it stays private to you.</p>
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <div class="label">OAuth Client ID</div>
+        <div class="muted">Ends with <code>.apps.googleusercontent.com</code></div>
+      </div>
+      <input type="text" id="driveClientId" placeholder="xxxx.apps.googleusercontent.com" />
+    </div>
+    <div class="row">
+      <div>
+        <div class="label">Target Drive folder</div>
+        <div class="muted">Paste the folder's URL or ID. Leave blank to upload to your Drive root. Tip: share this folder with your dev/team once — then the private links you send just work, no public sharing needed.</div>
+      </div>
+      <input type="text" id="driveFolderId" placeholder="https://drive.google.com/drive/folders/…" />
+    </div>
+    <div class="row">
+      <div>
+        <div class="label">Make links public (anyone with the link)</div>
+        <div class="muted"><b>Off by default for privacy.</b> Leave off if your folder is shared with the team. Turn on only if you send links to people outside the folder — screenshots can contain sensitive data.</div>
+      </div>
+      <label class="switch"><input type="checkbox" id="driveShareAnyone" /><span class="slider"></span></label>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="save" id="save">Save settings</button>
+    <span class="status" id="status">Saved ✓</span>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

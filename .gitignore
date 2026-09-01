@@ -1,0 +1,9 @@
+# Never commit private / signing material
+*.pem
+*.key
+*.p12
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini

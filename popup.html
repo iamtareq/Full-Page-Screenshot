@@ -1,0 +1,132 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    :root {
+      color-scheme: light dark;
+      --panel: #ffffff; --panel-2: #f6f7fb; --border: #e6e8ef;
+      --text: #0f172a; --muted: #6b7280;
+      --accent: #6366f1; --accent-grad: linear-gradient(135deg, #6366f1, #8b5cf6);
+      --ring: rgba(99,102,241,.35);
+      --shadow: 0 4px 14px rgba(16,24,40,.10), 0 1px 3px rgba(16,24,40,.06);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --panel:#181d29; --panel-2:#212838; --border:#2b3242; --text:#e8eaf1; --muted:#94a0b4;
+        --shadow: 0 6px 18px rgba(0,0,0,.4); }
+    }
+    * { box-sizing: border-box; }
+    body { width: 300px; margin: 0; font: 14px/1.4 -apple-system, system-ui, "Segoe UI", Roboto, Arial, sans-serif;
+      background: var(--panel); color: var(--text); -webkit-font-smoothing: antialiased; }
+
+    header {
+      display: flex; align-items: center; gap: 11px; padding: 16px 16px 14px;
+      background:
+        radial-gradient(120px 80px at 90% -20%, rgba(139,92,246,.35), transparent),
+        var(--accent-grad);
+      color: #fff;
+    }
+    header img { width: 30px; height: 30px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.25); }
+    header .t { display: flex; flex-direction: column; line-height: 1.15; }
+    header h1 { font-size: 14.5px; margin: 0; font-weight: 800; letter-spacing: .2px; }
+    header .tag { font-size: 11px; opacity: .85; font-weight: 500; }
+
+    .body { padding: 12px; display: flex; flex-direction: column; gap: 9px; }
+    .btn {
+      display: flex; align-items: center; gap: 12px; width: 100%; padding: 11px 12px; text-align: left;
+      border: 1px solid var(--border); border-radius: 12px; background: var(--panel);
+      color: var(--text); cursor: pointer; box-shadow: var(--shadow);
+      transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease, background .12s ease;
+    }
+    .btn:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+      box-shadow: 0 10px 24px rgba(99,102,241,.18); }
+    .btn:active { transform: translateY(0); }
+    .chip {
+      flex: 0 0 auto; width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; color: #fff;
+    }
+    .chip.a { background: var(--accent-grad); box-shadow: 0 4px 12px var(--ring); }
+    .chip.b { background: linear-gradient(135deg, #0ea5e9, #0284c7); }
+    .chip.c { background: linear-gradient(135deg, #f59e0b, #ea580c); }
+    .chip.d { background: linear-gradient(135deg, #14b8a6, #0d9488); }
+    .chip svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+    .txt b { font-size: 13.5px; font-weight: 700; }
+    .txt span { font-size: 11.5px; color: var(--muted); }
+    .kbd { margin-left: auto; flex: 0 0 auto; font: 700 10px/1 ui-monospace, monospace; color: var(--muted);
+      padding: 4px 7px; border-radius: 6px; background: var(--panel-2); border: 1px solid var(--border); }
+
+    .timer { display: flex; align-items: center; gap: 10px; padding: 2px 2px 0; }
+    .timer .tlabel { font-size: 11.5px; color: var(--muted); font-weight: 700; }
+    .seg { display: flex; gap: 3px; margin-left: auto; background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px; padding: 3px; }
+    .seg button { border: 0; background: transparent; color: var(--muted); font: 700 11.5px/1 -apple-system, system-ui, sans-serif; padding: 6px 12px; border-radius: 6px; cursor: pointer; transition: background .12s, color .12s; }
+    .seg button:hover { color: var(--text); }
+    .seg button.active { background: var(--accent-grad); color: #fff; box-shadow: 0 2px 8px var(--ring); }
+    .update { display: none; flex-direction: column; gap: 3px; padding: 10px 12px; border-radius: 11px;
+      background: linear-gradient(135deg, #fef3c7, #fde68a); color: #7c2d12; border: 1px solid #fcd34d; }
+    .update.show { display: flex; }
+    .update b { font-size: 12.5px; font-weight: 800; }
+    .update span.h { font-size: 11.5px; opacity: .95; }
+    .update code { background: rgba(0,0,0,.10); padding: 1px 5px; border-radius: 4px; font-family: ui-monospace, monospace; }
+    @media (prefers-color-scheme: dark) {
+      .update { background: linear-gradient(135deg, #78350f, #92400e); color: #fde68a; border-color: #b45309; }
+      .update code { background: rgba(255,255,255,.14); }
+    }
+    .foot { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px 14px; }
+    .foot .hint { font-size: 11px; color: var(--muted); }
+    .foot a { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 700; color: var(--accent);
+      text-decoration: none; cursor: pointer; padding: 5px 9px; border-radius: 8px; }
+    .foot a:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+    .foot a svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; }
+  </style>
+</head>
+<body>
+  <header>
+    <img src="icons/icon48.png" alt="" />
+    <div class="t">
+      <h1>Full Page Capture</h1>
+      <span class="tag">Capture · annotate · share</span>
+    </div>
+  </header>
+
+  <div class="body">
+    <div class="update" id="updateBanner">
+      <b>🔔 Update available <span id="updVer"></span></b>
+      <span class="h">Double-click <code>update.cmd</code> in the extension folder, then Reload the extension.</span>
+    </div>
+    <button class="btn" id="full">
+      <span class="chip a"><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></span>
+      <span class="txt"><b>Full page</b><span>Entire scrollable page</span></span>
+      <span class="kbd">Alt⇧P</span>
+    </button>
+    <button class="btn" id="visible">
+      <span class="chip b"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3"/></svg></span>
+      <span class="txt"><b>Visible area</b><span>Just what you see now</span></span>
+      <span class="kbd">Alt⇧V</span>
+    </button>
+    <button class="btn" id="region">
+      <span class="chip c"><svg viewBox="0 0 24 24"><path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/><rect x="8" y="8" width="8" height="8" rx="1" stroke-dasharray="2 2"/></svg></span>
+      <span class="txt"><b>Capture area</b><span>Drag to select · scrolls</span></span>
+      <span class="kbd">Alt⇧A</span>
+    </button>
+    <button class="btn" id="element">
+      <span class="chip d"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg></span>
+      <span class="txt"><b>Capture element</b><span>Hover &amp; click a component</span></span>
+      <span class="kbd">Alt⇧E</span>
+    </button>
+    <div class="timer">
+      <span class="tlabel">⏱ Delay before full/visible</span>
+      <div class="seg" id="timerSeg">
+        <button data-delay="0" class="active">Instant</button>
+        <button data-delay="3">3s</button>
+        <button data-delay="5">5s</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span class="hint">Opens an editor to annotate &amp; share</span>
+    <a id="options"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H1a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 2.6 7a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H7a1.6 1.6 0 0 0 1-1.5V1a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V7a1.6 1.6 0 0 0 1.5 1H23a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg>Settings</a>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
