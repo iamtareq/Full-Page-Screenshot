@@ -53,7 +53,8 @@
     .txt b { font-size: 13.5px; font-weight: 700; }
     .txt span { font-size: 11.5px; color: var(--muted); }
     .kbd { margin-left: auto; flex: 0 0 auto; font: 700 10px/1 ui-monospace, monospace; color: var(--muted);
-      padding: 4px 7px; border-radius: 6px; background: var(--panel-2); border: 1px solid var(--border); }
+      padding: 4px 7px; border-radius: 6px; background: var(--panel-2); border: 1px solid var(--border);
+      white-space: nowrap; letter-spacing: .3px; }
 
     .timer { display: flex; align-items: center; gap: 10px; padding: 2px 2px 0; }
     .timer .tlabel { font-size: 11.5px; color: var(--muted); font-weight: 700; }
@@ -96,22 +97,22 @@
     <button class="btn" id="full">
       <span class="chip a"><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></span>
       <span class="txt"><b>Full page</b><span>Entire scrollable page</span></span>
-      <span class="kbd">Alt⇧P</span>
+      <span class="kbd">Alt+Shift+P</span>
     </button>
     <button class="btn" id="visible">
       <span class="chip b"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3"/></svg></span>
       <span class="txt"><b>Visible area</b><span>Just what you see now</span></span>
-      <span class="kbd">Alt⇧V</span>
+      <span class="kbd">Alt+Shift+V</span>
     </button>
     <button class="btn" id="region">
       <span class="chip c"><svg viewBox="0 0 24 24"><path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/><rect x="8" y="8" width="8" height="8" rx="1" stroke-dasharray="2 2"/></svg></span>
       <span class="txt"><b>Capture area</b><span>Drag to select · scrolls</span></span>
-      <span class="kbd">Alt⇧A</span>
+      <span class="kbd">Alt+Shift+A</span>
     </button>
     <button class="btn" id="element">
       <span class="chip d"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg></span>
       <span class="txt"><b>Capture element</b><span>Hover &amp; click a component</span></span>
-      <span class="kbd">Alt⇧E</span>
+      <span class="kbd">Alt+Shift+E</span>
     </button>
     <div class="timer">
       <span class="tlabel">⏱ Delay before full/visible</span>

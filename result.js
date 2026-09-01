@@ -467,6 +467,7 @@ function wireTools() {
   el("copy").addEventListener("click", doCopy);
   el("print").addEventListener("click", doPrint);
   el("drive").addEventListener("click", uploadToDrive);
+  el("copyLink").addEventListener("click", copyDriveLink);
   try {
     if (chrome.notifications && chrome.notifications.onClicked) {
       chrome.notifications.onClicked.addListener(() => { if (lastDriveLink) window.open(lastDriveLink, "_blank"); });
@@ -1156,6 +1157,26 @@ function notifyDrive(title, message) {
   } catch (_) {}
 }
 
+// Re-copy the last uploaded Drive link. Recovery for when the auto-copy on upload
+// failed (tab not focused) or the clipboard was later overwritten by a Copy / Ctrl+C
+// (which puts the image on the clipboard, replacing the link).
+async function copyDriveLink() {
+  if (!lastDriveLink) return;
+  const btn = el("copyLink");
+  const label = btn && btn.querySelector("span");
+  try {
+    await navigator.clipboard.writeText(lastDriveLink);
+    toast("Drive link copied");
+    if (label) {
+      const orig = label.textContent;
+      label.textContent = "✓ Copied";
+      setTimeout(() => { if (label.textContent === "✓ Copied") label.textContent = orig; }, 2000);
+    }
+  } catch (_) {
+    toast("Couldn't copy — click anywhere on this page first, then try again");
+  }
+}
+
 async function uploadToDrive() {
   const btn = el("drive");
   const label = btn.querySelector("span");
@@ -1205,6 +1226,10 @@ async function uploadToDrive() {
 
     const vis = shareAnyone ? (sharedPublic ? "public link" : "private — sharing failed") : "private";
     lastDriveLink = link;
+    // Reveal the "Copy link" button so the link can be re-copied at any time — even if
+    // the auto-copy below fails (tab not focused) or the clipboard later gets overwritten
+    // by a Ctrl+C / Copy (which puts the image on the clipboard, replacing this link).
+    const clBtn = el("copyLink"); if (clBtn) clBtn.hidden = false;
     ok = true;
     toast("Uploaded ✓ (" + vis + ")" + (rootFallback ? ", to root" : "") +
       (copied ? " — link copied" : " — copy the link manually"));
