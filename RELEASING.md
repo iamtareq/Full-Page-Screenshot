@@ -17,16 +17,25 @@ just push, and everyone's popup shows an "Update available" banner.
    git push
    ```
 
-## What a teammate does when they see the banner
-1. Double-click **`update.cmd`** in the extension folder (runs `git pull`).
-2. `chrome://extensions` → click **Reload** on *Full Page Capture* (or restart Chrome).
+## What a teammate does when they see the "Update available" banner
+- **If they ran `install-updater.cmd` once (recommended):** just click **"Update now"**
+  in the popup — it pulls the update and reloads the extension automatically. Done.
+- **Otherwise (fallback):** double-click **`update.cmd`** (git pull), then
+  `chrome://extensions` → **Reload** (or restart Chrome).
 
 ## First-time setup for a new teammate
 ```
 git clone https://github.com/iamtareq/Full-Page-Screenshot.git
 ```
-Then `chrome://extensions` → Developer mode ON → **Load unpacked** → pick the folder.
-Add their Gmail as an OAuth **Test user** so Send to Drive works.
+1. `chrome://extensions` → Developer mode ON → **Load unpacked** → pick the folder.
+2. Double-click **`install-updater.cmd`** once → enables the one-click **"Update now"**
+   button (registers a tiny local `git pull` helper via native messaging).
+3. Add their Gmail as an OAuth **Test user** so Send to Drive works.
+
+> The "Update now" button needs the extension to already be on the version that has it
+> (v1.0.2+). Teammates on an older version update once the normal way (`update.cmd` +
+> reload) to get it, then run `install-updater.cmd` — after that every future update is
+> one click.
 
 ## Notes
 - The "Update available" banner only works while the repo is **public** (so GitHub's

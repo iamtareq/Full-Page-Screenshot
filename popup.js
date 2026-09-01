@@ -43,6 +43,42 @@ function verNewer(remote, local) {
   return false;
 }
 
+// "Update now": ask the local native host to `git pull`, then reload the extension
+// (reload re-reads the freshly pulled files from disk). Falls back to instructions
+// if the one-time updater host isn't installed.
+function runUpdate() {
+  const btn = document.getElementById("updBtn");
+  const how = document.getElementById("updHow");
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = "Updating…";
+  try {
+    chrome.runtime.sendNativeMessage("com.fpc.updater", { action: "pull" }, (resp) => {
+      if (chrome.runtime.lastError || !resp) {
+        btn.disabled = false;
+        btn.textContent = "Update now";
+        if (how) how.innerHTML = 'One-time setup: run <code>install-updater.cmd</code> in the extension folder once, then try again. (Or use <code>update.cmd</code> + Reload.)';
+        return;
+      }
+      if (resp.ok) {
+        btn.textContent = "Reloading…";
+        chrome.runtime.reload();   // picks up the just-pulled files
+      } else {
+        btn.disabled = false;
+        btn.textContent = "Retry";
+        if (how) how.textContent = "Update failed: " + String(resp.output || "unknown").slice(0, 140);
+      }
+    });
+  } catch (_) {
+    btn.disabled = false;
+    btn.textContent = "Update now";
+    if (how) how.textContent = "Couldn't start the updater.";
+  }
+}
+
+const _updBtn = document.getElementById("updBtn");
+if (_updBtn) _updBtn.addEventListener("click", runUpdate);
+
 (async function checkForUpdate() {
   try {
     const res = await fetch(FPC_VERSION_URL, { cache: "no-store" });

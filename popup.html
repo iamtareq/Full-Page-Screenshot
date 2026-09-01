@@ -68,9 +68,15 @@
     .update b { font-size: 12.5px; font-weight: 800; }
     .update span.h { font-size: 11.5px; opacity: .95; }
     .update code { background: rgba(0,0,0,.10); padding: 1px 5px; border-radius: 4px; font-family: ui-monospace, monospace; }
+    .update .urow { display: flex; align-items: center; gap: 9px; }
+    .update .ubtn { flex: 0 0 auto; border: 0; border-radius: 8px; padding: 7px 13px; cursor: pointer;
+      font: 800 12px/1 -apple-system, system-ui, sans-serif; background: #7c2d12; color: #fff; }
+    .update .ubtn:hover { filter: brightness(1.12); }
+    .update .ubtn:disabled { opacity: .6; cursor: default; }
     @media (prefers-color-scheme: dark) {
       .update { background: linear-gradient(135deg, #78350f, #92400e); color: #fde68a; border-color: #b45309; }
       .update code { background: rgba(255,255,255,.14); }
+      .update .ubtn { background: #fde68a; color: #78350f; }
     }
     .foot { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px 14px; }
     .foot .hint { font-size: 11px; color: var(--muted); }
@@ -92,7 +98,10 @@
   <div class="body">
     <div class="update" id="updateBanner">
       <b>🔔 Update available <span id="updVer"></span></b>
-      <span class="h">Double-click <code>update.cmd</code> in the extension folder, then Reload the extension.</span>
+      <div class="urow">
+        <button class="ubtn" id="updBtn">Update now</button>
+        <span class="h" id="updHow">One click — pulls the update &amp; reloads.</span>
+      </div>
     </div>
     <button class="btn" id="full">
       <span class="chip a"><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></span>

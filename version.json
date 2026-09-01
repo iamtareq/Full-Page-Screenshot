@@ -1,4 +1,4 @@
 {
-  "version": "1.0.1",
-  "notes": "Clearer Alt+Shift shortcut labels; new 'Copy link' button to re-copy the Drive link anytime."
+  "version": "1.0.2",
+  "notes": "One-click 'Update now' button in the popup (run install-updater.cmd once to enable)."
 }
