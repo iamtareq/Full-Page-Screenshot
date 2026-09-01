@@ -57,7 +57,8 @@
       white-space: nowrap; letter-spacing: .3px; }
 
     .timer { display: flex; align-items: center; gap: 10px; padding: 2px 2px 0; }
-    .timer .tlabel { font-size: 11.5px; color: var(--muted); font-weight: 700; }
+    .timer .tlabel { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--muted); font-weight: 700; }
+    .timer .ticon { width: 13px; height: 13px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
     .seg { display: flex; gap: 3px; margin-left: auto; background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px; padding: 3px; }
     .seg button { border: 0; background: transparent; color: var(--muted); font: 700 11.5px/1 -apple-system, system-ui, sans-serif; padding: 6px 12px; border-radius: 6px; cursor: pointer; transition: background .12s, color .12s; }
     .seg button:hover { color: var(--text); }
@@ -124,7 +125,7 @@
       <span class="kbd">Alt+Shift+E</span>
     </button>
     <div class="timer">
-      <span class="tlabel">⏱ Delay before full/visible</span>
+      <span class="tlabel"><svg class="ticon" viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9 2h6"/></svg>Delay before full/visible</span>
       <div class="seg" id="timerSeg">
         <button data-delay="0" class="active">Instant</button>
         <button data-delay="3">3s</button>

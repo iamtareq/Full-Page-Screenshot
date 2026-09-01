@@ -1,4 +1,4 @@
 {
-  "version": "1.0.2",
-  "notes": "One-click 'Update now' button in the popup (run install-updater.cmd once to enable)."
+  "version": "1.0.3",
+  "notes": "Timer icon now shows correctly in Edge (SVG instead of an emoji that didn't render)."
 }
