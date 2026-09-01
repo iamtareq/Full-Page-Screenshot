@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1EZ4N9I5b+PyqatnFUsJtyq3YRlf+AzztNQ5QQwbfRgK8/p6+J1bZdd8PDH/capwOiiR22lNCtsHQfRH/1I8msx52wosaRpH9SVfNexCKQmshzJyXMS5rXs+3P3Kz/X6xxjBA7LgIEfjHn7Kap30h0/aqyp6h75W3k/DCY/zIZzDGZ/dsduDqkKC14zMhdXdXR0E+j7aaSGrwTpWUHOQkiRRpsE+UGkJlQJ0ruO+OeePVF32ytpsugYpDdHOLp2TpDBq3lxpKd+XTmcmf1iL6NLGhoWMRsic57/0BbGFRArSTfMo57Z4mMOCTHWeNZm/p7PT4NH4Fo3FLG69qMFLNQIDAQAB",
   "name": "Full Page Capture — Screenshot",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Capture a full-page screenshot of any web page in one click. Export as PNG, JPG or PDF, copy to clipboard, or crop.",
   "permissions": [
     "activeTab",

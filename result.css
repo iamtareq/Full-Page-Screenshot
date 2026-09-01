@@ -101,6 +101,9 @@ body {
 .tbtn.drive:hover { filter: brightness(1.05); box-shadow: 0 8px 22px rgba(16, 185, 129, .4); }
 .tbtn.drive svg { stroke: #fff; }
 .tbtn.drive:disabled { opacity: .6; }
+.tbtn.copylink { border-color: rgba(16, 185, 129, .5); color: #10b981; }
+.tbtn.copylink svg { stroke: #10b981; }
+.tbtn.copylink:hover { background: rgba(16, 185, 129, .12); }
 .tbtn:disabled { cursor: default; }
 .tbtn.ghost { padding: 8px 9px; background: transparent; border-color: transparent; box-shadow: none; color: var(--muted); }
 .tbtn.ghost:hover { background: var(--panel-2); color: var(--text); box-shadow: none; transform: none; }
