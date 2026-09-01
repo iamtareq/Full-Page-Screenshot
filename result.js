@@ -55,6 +55,14 @@ let redoStack = [];
 let liveAnnot = null;
 let activePointerId = null;
 const ANNOT_COLORS = ["#e11d48", "#f97316", "#facc15", "#22c55e", "#3b82f6", "#111827", "#ffffff"];
+// QA bug-report stamps — click to drop a labelled pill (kind → label + colour).
+const STAMPS = {
+  bug:    { label: "BUG",     color: "#e11d48" },
+  pass:   { label: "PASS",    color: "#16a34a" },
+  fixed:  { label: "FIXED",   color: "#d97706" },
+  retest: { label: "RE-TEST", color: "#2563eb" }
+};
+let stampKind = "bug";
 
 /* ------------------------- Boot ------------------------- */
 init();
@@ -209,9 +217,12 @@ async function onTile(tile) {
 
   // Source rect inside the bitmap (its origin = page (tile.x, tile.y)). Content area
   // only — cropWpx/cropHpx exclude scrollbar gutters; on RTL content is right-aligned.
+  // Inner-container capture: the container content sits at a device-px offset inside
+  // each viewport tile (co.dx/co.dy), so shift the source rect to read from there.
+  const co = meta.containerOffset || null;
   const contentOriginX = scrollbarLeft ? Math.max(0, bw - cropWpx) : 0;
-  const srcX = contentOriginX + (ox0 - tile.x) * dpr;
-  const srcYf = (oy0 - tile.y) * dpr;
+  const srcX = contentOriginX + (ox0 - tile.x) * dpr + (co ? co.dx : 0);
+  const srcYf = (oy0 - tile.y) * dpr + (co ? co.dy : 0);
   const srcW = (ox1 - ox0) * dpr;
   const srcHf = (oy1 - oy0) * dpr;
   const ry = srcHf / destH; // source-per-dest-row (≈ 1)
@@ -300,6 +311,7 @@ function formatEnv(env) {
   if (p.os) parts.push(p.os);
   if (env.vw && env.vh) parts.push(env.vw + "×" + env.vh);
   parts.push("DPR " + (Math.round((env.dpr || 1) * 100) / 100));
+  if (env.loadMs && env.loadMs > 0) parts.push("Load " + (env.loadMs / 1000).toFixed(2) + "s");
   return parts.join("   ·   ");
 }
 function hasEnvLine() { return !!(envBar && meta && meta.env && meta.env.ua && meta.env.vw); }
@@ -757,7 +769,19 @@ function wireAnnotation() {
     btn.addEventListener("click", () => {
       annotTool = btn.dataset.tool;
       document.querySelectorAll(".atool").forEach((b) => b.classList.remove("active"));
+      document.querySelectorAll(".astamp").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
+    });
+  });
+  // QA stamp buttons — pick the "stamp" tool with a preset label + colour.
+  document.querySelectorAll(".astamp").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      annotTool = "stamp";
+      stampKind = btn.dataset.stamp;
+      const s = STAMPS[stampKind];
+      if (s) { annotColor = s.color; [...el("acolors").children].forEach((c) => c.classList.remove("active")); }
+      document.querySelectorAll(".atool").forEach((b) => b.classList.remove("active"));
+      document.querySelectorAll(".astamp").forEach((b) => b.classList.toggle("active", b === btn));
     });
   });
   el("awidth").addEventListener("input", (e) => { annotWidth = parseInt(e.target.value, 10); });
@@ -835,6 +859,13 @@ function onAnnotDown(e) {
   if (annotTool === "text") return startText(e, p);
   if (annotTool === "step") { // click-to-drop, auto-numbered
     annotations.push({ type: "step", color: annotColor, width: annotWidth * dpr, x1: p.x, y1: p.y });
+    redoStack = [];
+    renderAnnots();
+    return;
+  }
+  if (annotTool === "stamp") { // click-to-drop QA stamp (BUG / PASS / FIXED / RE-TEST)
+    const s = STAMPS[stampKind] || STAMPS.bug;
+    annotations.push({ type: "stamp", label: s.label, color: s.color, width: annotWidth * dpr, x1: p.x, y1: p.y });
     redoStack = [];
     renderAnnots();
     return;
@@ -967,6 +998,24 @@ function drawAnnot(a) {
       ctx.font = `700 ${Math.round(r * 1.15)}px system-ui, "Segoe UI", Arial, sans-serif`;
       ctx.textAlign = "center"; ctx.textBaseline = "middle";
       ctx.fillText(String(n), a.x1, a.y1 + r * 0.06);
+      break;
+    }
+    case "stamp": {
+      const fs = Math.max(15, (a.width || 6) * 2.4);
+      ctx.font = `800 ${Math.round(fs)}px system-ui, "Segoe UI", Arial, sans-serif`;
+      const label = a.label || "BUG";
+      const padX = Math.round(fs * 0.55), padY = Math.round(fs * 0.34);
+      const tw = ctx.measureText(label).width;
+      const bw = Math.round(tw + padX * 2), bh = Math.round(fs + padY * 2);
+      const rr = Math.round(bh * 0.28);
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(a.x1, a.y1, bw, bh, rr);
+      else ctx.rect(a.x1, a.y1, bw, bh);
+      ctx.fillStyle = a.color; ctx.fill();
+      ctx.lineWidth = Math.max(2, Math.round(fs * 0.08)); ctx.strokeStyle = "rgba(255,255,255,.92)"; ctx.stroke();
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.fillText(label, a.x1 + padX, a.y1 + bh / 2 + Math.round(fs * 0.03));
       break;
     }
   }

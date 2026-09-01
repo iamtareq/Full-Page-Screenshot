@@ -1,4 +1,4 @@
 {
-  "version": "1.0.3",
-  "notes": "Timer icon now shows correctly in Edge (SVG instead of an emoji that didn't render)."
+  "version": "1.1.0",
+  "notes": "Inner-scroll capture for SPA/ERP dashboards & data tables; QA stamps (BUG/PASS/FIXED/RE-TEST); page load time in the info bar; safer updater."
 }
