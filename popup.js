@@ -34,6 +34,8 @@ document.getElementById("options").addEventListener("click", (e) => {
 const FPC_VERSION_URL =
   "https://raw.githubusercontent.com/iamtareq/Full-Page-Screenshot/main/version.json";
 
+let latestVersion = "";   // version.json on the repo, captured by the update check
+
 function verNewer(remote, local) {
   const a = String(remote).split("."), b = String(local).split(".");
   for (let i = 0; i < Math.max(a.length, b.length); i++) {
@@ -57,10 +59,28 @@ function runUpdate() {
       if (chrome.runtime.lastError || !resp) {
         btn.disabled = false;
         btn.textContent = "Update now";
-        if (how) how.innerHTML = 'One-time setup: run <code>install-updater.cmd</code> in the extension folder once, then try again. (Or use <code>update.cmd</code> + Reload.)';
+        const msg = (chrome.runtime.lastError && chrome.runtime.lastError.message) || "";
+        if (how) {
+          if (!msg || /not found/i.test(msg)) {
+            // genuinely not registered yet
+            how.innerHTML = 'One-time setup: run <code>install-updater.cmd</code> in the extension folder once, then try again. (Or use <code>update.cmd</code> + Reload.)';
+          } else {
+            // registered, but the helper could not run (execution policy, antivirus, deleted file)
+            how.textContent = "The updater is installed but could not start (" + msg + "). Use update.cmd + Reload, or re-run install-updater.cmd.";
+          }
+        }
         return;
       }
       if (resp.ok) {
+        // The host updates the folder IT lives in. If that is not the copy Chrome
+        // loaded, reloading looks like a no-op and loops forever - so say so instead.
+        if (latestVersion && resp.version && resp.version !== latestVersion) {
+          btn.disabled = false;
+          btn.textContent = "Retry";
+          if (how) how.textContent = "Updated a different copy" + (resp.repo ? " (" + resp.repo + ")" : "") +
+            " - Chrome seems to have loaded another folder. Load unpacked from that folder, or update it directly.";
+          return;
+        }
         btn.textContent = "Reloading…";
         chrome.runtime.reload();   // picks up the just-pulled files
       } else {
@@ -91,6 +111,7 @@ if (_updBtn) _updBtn.addEventListener("click", runUpdate);
     if (!res.ok) return;
     const remote = ((await res.json()) || {}).version || "";
     const local = chrome.runtime.getManifest().version;
+    latestVersion = remote;
     if (remote && verNewer(remote, local)) {
       const v = document.getElementById("updVer");
       if (v) v.textContent = "(v" + remote + ")";

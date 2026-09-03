@@ -1,4 +1,4 @@
 {
-  "version": "1.1.2",
-  "notes": "Updater actually applies updates now (git progress on stderr no longer aborts it); annotation size is remembered and has finer, saner steps."
+  "version": "1.1.3",
+  "notes": "Paint-style editing (change size/colour of the shape you just drew) + keyboard shortcuts; updater hardened against locked files, odd paths, missing git and wrong-folder updates."
 }
