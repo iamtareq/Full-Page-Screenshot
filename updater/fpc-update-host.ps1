@@ -39,20 +39,27 @@ try {
   # developer's own) is never silently wiped. Untracked files are ignored on purpose:
   # install-updater.cmd generates updater/com.fpc.updater.json inside the repo, and
   # counting that as 'dirty' used to block every update. ----
+  # git writes NORMAL progress ("From <url>", "* [new branch] ...") to STDERR. Under
+  # $ErrorActionPreference = "Stop" that stderr is promoted to a TERMINATING error, so the
+  # updater blew up precisely WHEN THERE WAS SOMETHING TO FETCH (and silently "worked" when
+  # already up to date). Judge git only by $LASTEXITCODE, and flatten records to plain
+  # strings so the reported output stays readable.
+  $ErrorActionPreference = "Continue"
   $repo = Split-Path -Parent $PSScriptRoot
-  $fetch = & git -C "$repo" fetch --prune origin 2>&1 | Out-String
+  $fetch = ((& git -C "$repo" fetch --prune origin 2>&1 | ForEach-Object { "$_" }) -join "`n").Trim()
   if ($LASTEXITCODE -ne 0) {
     $payload = @{ ok = $false; output = ("Fetch failed (offline / no access?):`n" + $fetch).Trim() }
   } else {
-    $branch = (& git -C "$repo" rev-parse --abbrev-ref HEAD 2>&1 | Out-String).Trim()
+    $branch = ((& git -C "$repo" rev-parse --abbrev-ref HEAD 2>&1 | ForEach-Object { "$_" }) -join "").Trim()
     if (-not $branch -or $branch -eq "HEAD") { $branch = "main" }
-    $dirty = (& git -C "$repo" status --porcelain --untracked-files=no 2>&1 | Out-String).Trim()
+    # stdout only: stray stderr must never be mistaken for a dirty working tree
+    $dirty = ((& git -C "$repo" status --porcelain --untracked-files=no) | Out-String).Trim()
     if ($dirty) {
       $payload = @{ ok = $false; output = ("Update skipped: this copy has uncommitted local changes, so it was NOT overwritten. Commit or discard them, then update:`n" + $dirty).Trim() }
     } else {
-      $reset = & git -C "$repo" reset --hard "origin/$branch" 2>&1 | Out-String
+      $reset = ((& git -C "$repo" reset --hard "origin/$branch" 2>&1 | ForEach-Object { "$_" }) -join "`n").Trim()
       $ok = ($LASTEXITCODE -eq 0)
-      $payload = @{ ok = $ok; output = ($fetch + $reset).Trim() }
+      $payload = @{ ok = $ok; output = ($fetch + "`n" + $reset).Trim() }
     }
   }
 }

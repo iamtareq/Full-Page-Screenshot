@@ -185,6 +185,7 @@ input[type="range"] { accent-color: var(--accent); }
 .acustom::-webkit-color-swatch { border: none; border-radius: 50%; }
 .awidth { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); font-weight: 600; }
 .awidth input { width: 108px; }
+.awidth .awval { min-width: 26px; text-align: right; font: 700 11.5px/1 ui-monospace, monospace; color: var(--text); }
 
 /* ============================ Stage ============================ */
 .stage { flex: 1; overflow: auto; padding: 34px; display: flex; justify-content: center; align-items: flex-start; }
