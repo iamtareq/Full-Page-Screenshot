@@ -1,4 +1,4 @@
 {
-  "version": "1.1.0",
-  "notes": "Inner-scroll capture for SPA/ERP dashboards & data tables; QA stamps (BUG/PASS/FIXED/RE-TEST); page load time in the info bar; safer updater."
+  "version": "1.1.1",
+  "notes": "Fixes the updater getting stuck on \"Retry\" (the installer-generated native-host manifest no longer counts as a dirty working tree); popup footer now shows the running version."
 }

@@ -79,8 +79,11 @@
       .update code { background: rgba(255,255,255,.14); }
       .update .ubtn { background: #fde68a; color: #78350f; }
     }
-    .foot { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px 14px; }
-    .foot .hint { font-size: 11px; color: var(--muted); }
+    .foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 16px 14px; }
+    .foot .hint { font-size: 11px; color: var(--muted); flex: 1 1 auto; min-width: 0;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .foot .ver { flex: 0 0 auto; font: 700 10px/1 ui-monospace, monospace; color: var(--muted);
+      background: var(--panel-2); border: 1px solid var(--border); padding: 4px 6px; border-radius: 5px; }
     .foot a { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 700; color: var(--accent);
       text-decoration: none; cursor: pointer; padding: 5px 9px; border-radius: 8px; }
     .foot a:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
@@ -135,7 +138,8 @@
   </div>
 
   <div class="foot">
-    <span class="hint">Opens an editor to annotate &amp; share</span>
+    <span class="hint">Annotate &amp; share</span>
+    <span class="ver" id="verLabel"></span>
     <a id="options"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H1a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 2.6 7a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H7a1.6 1.6 0 0 0 1-1.5V1a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V7a1.6 1.6 0 0 0 1.5 1H23a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg>Settings</a>
   </div>
   <script src="popup.js"></script>
