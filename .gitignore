@@ -7,3 +7,8 @@
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Generated per-machine by install-updater.cmd. It MUST stay on disk (the native-host
+# registry entry points at it), but it is not repo content - and if it were left
+# untracked it would make `git status` permanently dirty, which used to block updates.
+updater/com.fpc.updater.json

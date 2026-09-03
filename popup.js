@@ -76,6 +76,12 @@ function runUpdate() {
   }
 }
 
+// Show the running version in the footer (handy when checking whether an update applied).
+try {
+  const _v = document.getElementById("verLabel");
+  if (_v) _v.textContent = "v" + chrome.runtime.getManifest().version;
+} catch (_) {}
+
 const _updBtn = document.getElementById("updBtn");
 if (_updBtn) _updBtn.addEventListener("click", runUpdate);
 

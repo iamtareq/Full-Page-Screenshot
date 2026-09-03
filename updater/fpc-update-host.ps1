@@ -35,8 +35,10 @@ try {
   # ---- do the work: fetch, then fast-forward the repo (parent folder of this script)
   # to the remote branch. Teammates run plain clones (never edit the code), so this just
   # advances them to the latest. Safety: only reset AFTER a successful fetch, and REFUSE
-  # to touch a working tree that has local changes, so an actively-edited copy (e.g. the
-  # developer's own) is never silently wiped. ----
+  # to touch a working tree with modified TRACKED files, so an actively-edited copy (e.g. the
+  # developer's own) is never silently wiped. Untracked files are ignored on purpose:
+  # install-updater.cmd generates updater/com.fpc.updater.json inside the repo, and
+  # counting that as 'dirty' used to block every update. ----
   $repo = Split-Path -Parent $PSScriptRoot
   $fetch = & git -C "$repo" fetch --prune origin 2>&1 | Out-String
   if ($LASTEXITCODE -ne 0) {
@@ -44,7 +46,7 @@ try {
   } else {
     $branch = (& git -C "$repo" rev-parse --abbrev-ref HEAD 2>&1 | Out-String).Trim()
     if (-not $branch -or $branch -eq "HEAD") { $branch = "main" }
-    $dirty = (& git -C "$repo" status --porcelain 2>&1 | Out-String).Trim()
+    $dirty = (& git -C "$repo" status --porcelain --untracked-files=no 2>&1 | Out-String).Trim()
     if ($dirty) {
       $payload = @{ ok = $false; output = ("Update skipped: this copy has uncommitted local changes, so it was NOT overwritten. Commit or discard them, then update:`n" + $dirty).Trim() }
     } else {
