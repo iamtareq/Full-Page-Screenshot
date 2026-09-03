@@ -54,6 +54,7 @@ let annotations = [];
 let redoStack = [];
 let liveAnnot = null;
 let activePointerId = null;
+let activeAnnot = null;      // last shape drawn — stays adjustable (Paint-style) until you draw again
 const ANNOT_COLORS = ["#e11d48", "#f97316", "#facc15", "#22c55e", "#3b82f6", "#111827", "#ffffff"];
 // QA bug-report stamps — click to drop a labelled pill (kind → label + colour).
 const STAMPS = {
@@ -501,11 +502,55 @@ function wireTools() {
     const t = e.target;
     if (t && (/^(input|textarea|select)$/i.test(t.tagName) || t.isContentEditable)) return;
     const ctrl = e.ctrlKey || e.metaKey;
-    if (annotating && e.key === "Escape") { exitAnnot(); return; }
-    if (annotating && ctrl && e.key.toLowerCase() === "z" && !e.shiftKey) { e.preventDefault(); annotUndo(); return; }
-    if (annotating && ctrl && (e.key.toLowerCase() === "y" || (e.shiftKey && e.key.toLowerCase() === "z"))) { e.preventDefault(); annotRedo(); return; }
-    if (ctrl && e.key.toLowerCase() === "s") { e.preventDefault(); doDownload(currentFormat); }
-    if (ctrl && e.key.toLowerCase() === "c" && !window.getSelection().toString()) { doCopy(); }
+    const k = e.key.toLowerCase();
+    const click = (id) => { const b = el(id); if (b && !b.disabled) b.click(); };
+
+    // ---- Ctrl combos (work whether or not the annotation bar is open) ----
+    if (ctrl && k === "s") { e.preventDefault(); doDownload(currentFormat); return; }
+    if (ctrl && k === "p") { e.preventDefault(); doPrint(); return; }
+    if (ctrl && k === "c" && !window.getSelection().toString()) { doCopy(); return; }
+    if (ctrl && k === "z" && !e.shiftKey) { e.preventDefault(); annotUndo(); return; }
+    if (ctrl && (k === "y" || (e.shiftKey && k === "z"))) { e.preventDefault(); annotRedo(); return; }
+    if (ctrl && k === "a") { e.preventDefault(); annotating ? exitAnnot() : startAnnot(); return; }
+
+    // ---- zoom: plain +/-/0 (Ctrl+= and Ctrl+- belong to the browser, we cannot take them) ----
+    if (!ctrl && !e.altKey) {
+      if (e.key === "+" || e.key === "=") { e.preventDefault(); click("zoomIn"); return; }
+      if (e.key === "-" || e.key === "_") { e.preventDefault(); click("zoomOut"); return; }
+      if (e.key === "0") { e.preventDefault(); click("zoomFit"); return; }
+    }
+
+    // ---- annotation-only keys ----
+    if (annotating) {
+      // Esc first drops the live shape, then leaves annotate mode.
+      if (e.key === "Escape") { if (activeAnnot) clearActiveAnnot(); else exitAnnot(); return; }
+      if (e.key === "Delete" || e.key === "Backspace") {
+        if (deleteActiveAnnot()) { e.preventDefault(); return; }
+      }
+      if (!ctrl && !e.altKey) {
+        // [ / ] nudge the size - and because the last shape stays live, this resizes IT
+        if (e.key === "[" || e.key === "]") {
+          const w = el("awidth");
+          if (w) {
+            const step = parseFloat(w.step) || 1;
+            const next = (parseFloat(w.value) || 1) + (e.key === "]" ? step : -step);
+            w.value = String(Math.min(parseFloat(w.max), Math.max(parseFloat(w.min), next)));
+            w.dispatchEvent(new Event("input", { bubbles: true }));
+            w.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+          e.preventDefault();
+          return;
+        }
+        // single-letter tool picks, like most drawing apps
+        const TOOLKEYS = { r: "rect", o: "ellipse", a: "arrow", l: "line", p: "pen", h: "highlight", t: "text", n: "step", b: "blur" };
+        const tool = TOOLKEYS[k];
+        if (tool) {
+          const btn = document.querySelector('.atool[data-tool="' + tool + '"]');
+          if (btn) { e.preventDefault(); btn.click(); }
+          return;
+        }
+      }
+    }
   });
 }
 
@@ -760,6 +805,7 @@ function wireAnnotation() {
       annotColor = col;
       [...cont.children].forEach((c) => c.classList.remove("active"));
       b.classList.add("active");
+      applyActiveColour();
     });
     cont.appendChild(b);
   });
@@ -768,6 +814,7 @@ function wireAnnotation() {
     if (btn.dataset.tool === annotTool) btn.classList.add("active");
     btn.addEventListener("click", () => {
       annotTool = btn.dataset.tool;
+      clearActiveAnnot();
       document.querySelectorAll(".atool").forEach((b) => b.classList.remove("active"));
       document.querySelectorAll(".astamp").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
@@ -777,6 +824,7 @@ function wireAnnotation() {
   document.querySelectorAll(".astamp").forEach((btn) => {
     btn.addEventListener("click", () => {
       annotTool = "stamp";
+      clearActiveAnnot();
       stampKind = btn.dataset.stamp;
       const s = STAMPS[stampKind];
       if (s) { annotColor = s.color; [...el("acolors").children].forEach((c) => c.classList.remove("active")); }
@@ -793,6 +841,7 @@ function wireAnnotation() {
     const v = parseFloat(e.target.value);
     annotWidth = (isFinite(v) && v > 0) ? v : 1;
     reflectWidth();
+    applyActiveWidth();
   });
   // Persist on release only (input fires continuously while dragging).
   wIn.addEventListener("change", () => {
@@ -810,6 +859,7 @@ function wireAnnotation() {
   if (custom) custom.addEventListener("input", (e) => {
     annotColor = e.target.value;
     [...el("acolors").children].forEach((c) => c.classList.remove("active"));
+    applyActiveColour();
   });
 
   el("annotate").addEventListener("click", () => (annotating ? exitAnnot() : startAnnot()));
@@ -838,6 +888,7 @@ function startAnnot() {
 function exitAnnot() {
   annotating = false;
   liveAnnot = null;
+  clearActiveAnnot();
   el("annotbar").hidden = true;
   el("annotate").classList.remove("on");
   canvasHost.classList.remove("annotating");
@@ -877,17 +928,22 @@ function onAnnotDown(e) {
   if (liveAnnot) return;                         // one stroke at a time (ignore extra touches)
   e.preventDefault();
   const p = evtToImg(e);
+  clearActiveAnnot();
   if (annotTool === "text") return startText(e, p);
   if (annotTool === "step") { // click-to-drop, auto-numbered
-    annotations.push({ type: "step", color: annotColor, width: annotWidth * dpr, x1: p.x, y1: p.y });
+    const a = { type: "step", color: annotColor, width: annotWidth * dpr, x1: p.x, y1: p.y };
+    annotations.push(a);
     redoStack = [];
+    setActiveAnnot(a);
     renderAnnots();
     return;
   }
   if (annotTool === "stamp") { // click-to-drop QA stamp (BUG / PASS / FIXED / RE-TEST)
     const s = STAMPS[stampKind] || STAMPS.bug;
-    annotations.push({ type: "stamp", label: s.label, color: s.color, width: annotWidth * dpr, x1: p.x, y1: p.y });
+    const a = { type: "stamp", label: s.label, color: s.color, width: annotWidth * dpr, x1: p.x, y1: p.y };
+    annotations.push(a);
     redoStack = [];
+    setActiveAnnot(a);
     renderAnnots();
     return;
   }
@@ -911,7 +967,7 @@ function onAnnotUp(e) {
   const a = liveAnnot; liveAnnot = null; activePointerId = null;
   const freehand = a.type === "pen" || a.type === "highlight";
   const trivial = freehand ? a.points.length < 2 : (Math.abs(a.x2 - a.x1) < 3 && Math.abs(a.y2 - a.y1) < 3);
-  if (!trivial) { annotations.push(a); redoStack = []; }
+  if (!trivial) { annotations.push(a); redoStack = []; setActiveAnnot(a); }
   renderAnnots();
 }
 function onAnnotCancel(e) {
@@ -941,8 +997,10 @@ function startText(e, p) {
     const val = input.value.trim();
     input.remove();
     if (val) {
-      annotations.push({ type: "text", color: annotColor, x1: p.x, y1: p.y, size: sizeDev, text: val });
+      const ta = { type: "text", color: annotColor, x1: p.x, y1: p.y, size: sizeDev, text: val };
+      annotations.push(ta);
       redoStack = [];
+      setActiveAnnot(ta);
       renderAnnots();
     }
   };
@@ -951,6 +1009,34 @@ function startText(e, p) {
     else if (ev.key === "Escape") { input.value = ""; commit(); }
   });
   input.addEventListener("blur", commit);
+}
+
+// --- Paint-style "live" shape -------------------------------------------------
+// The most recently drawn annotation stays selected, so changing Size (or colour)
+// re-applies to IT instead of only affecting the next one. It is finalised as soon
+// as you start another shape, switch tool, undo/clear, or leave annotate mode.
+function reflectActive() { const h = el("ahint"); if (h) h.hidden = !activeAnnot; }
+function setActiveAnnot(a) { activeAnnot = a || null; reflectActive(); }
+function clearActiveAnnot() { activeAnnot = null; reflectActive(); }
+function deleteActiveAnnot() {
+  if (!activeAnnot) return false;
+  const i = annotations.indexOf(activeAnnot);
+  if (i >= 0) { annotations.splice(i, 1); redoStack = []; }
+  clearActiveAnnot();
+  renderAnnots();
+  return true;
+}
+function applyActiveWidth() {
+  if (!activeAnnot) return;
+  // text carries its own font size; everything else uses the stroke width
+  if (activeAnnot.type === "text") activeAnnot.size = Math.max(16, annotWidth * dpr * 2.4);
+  else activeAnnot.width = annotWidth * dpr;
+  renderAnnots();
+}
+function applyActiveColour() {
+  if (!activeAnnot || activeAnnot.type === "stamp") return;  // stamps keep their meaning-colour
+  activeAnnot.color = annotColor;
+  renderAnnots();
 }
 
 function renderAnnots() {
@@ -1083,9 +1169,9 @@ function drawBlur(ctx, x, y, w, h) {
   ctx.imageSmoothingEnabled = true;
 }
 
-function annotUndo() { if (annotations.length) { redoStack.push(annotations.pop()); renderAnnots(); } }
-function annotRedo() { if (redoStack.length) { annotations.push(redoStack.pop()); renderAnnots(); } }
-function annotClear() { annotations = []; redoStack = []; renderAnnots(); }
+function annotUndo() { clearActiveAnnot(); if (annotations.length) { redoStack.push(annotations.pop()); renderAnnots(); } }
+function annotRedo() { clearActiveAnnot(); if (redoStack.length) { annotations.push(redoStack.pop()); renderAnnots(); } }
+function annotClear() { clearActiveAnnot(); annotations = []; redoStack = []; renderAnnots(); }
 
 // Returns a canvas with annotations baked in, or the raw segment canvas if none.
 function flatten(seg) {
