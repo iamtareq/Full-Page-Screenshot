@@ -1,4 +1,4 @@
 {
-  "version": "1.1.1",
-  "notes": "Fixes the updater getting stuck on \"Retry\" (the installer-generated native-host manifest no longer counts as a dirty working tree); popup footer now shows the running version."
+  "version": "1.1.2",
+  "notes": "Updater actually applies updates now (git progress on stderr no longer aborts it); annotation size is remembered and has finer, saner steps."
 }

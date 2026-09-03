@@ -784,7 +784,28 @@ function wireAnnotation() {
       document.querySelectorAll(".astamp").forEach((b) => b.classList.toggle("active", b === btn));
     });
   });
-  el("awidth").addEventListener("input", (e) => { annotWidth = parseInt(e.target.value, 10); });
+  // Size: sub-unit steps (the drawn width is annotWidth * dpr, and text/badges scale it
+  // by 2.4 again, so whole-number steps jumped far too much). Remembered per machine —
+  // the right thickness depends on the display, so chrome.storage.local, not sync.
+  const wIn = el("awidth"), wVal = el("awidthVal");
+  const reflectWidth = () => { if (wVal) wVal.textContent = String(annotWidth); };
+  wIn.addEventListener("input", (e) => {
+    const v = parseFloat(e.target.value);
+    annotWidth = (isFinite(v) && v > 0) ? v : 1;
+    reflectWidth();
+  });
+  // Persist on release only (input fires continuously while dragging).
+  wIn.addEventListener("change", () => {
+    try { chrome.storage.local.set({ annotWidth }); } catch (_) {}
+  });
+  (async () => {
+    try {
+      const s = await chrome.storage.local.get("annotWidth");
+      const w = s && s.annotWidth;
+      if (typeof w === "number" && isFinite(w) && w > 0) { annotWidth = w; wIn.value = String(w); }
+    } catch (_) {}
+    reflectWidth();
+  })();
   const custom = el("acustom");
   if (custom) custom.addEventListener("input", (e) => {
     annotColor = e.target.value;
