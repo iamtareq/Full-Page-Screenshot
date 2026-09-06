@@ -58,7 +58,7 @@ async function getSettings() {
 
 function setBadge(text, color) {
   try {
-    chrome.action.setBadgeBackgroundColor({ color: color || "#4f46e5" });
+    chrome.action.setBadgeBackgroundColor({ color: color || "#0d9488" });
     chrome.action.setBadgeText({ text: text || "" });
   } catch (_) {}
 }
@@ -398,9 +398,9 @@ function fpcSelectRegion() {
     const mkDim = () => { const d = document.createElement("div"); d.style.cssText = "position:absolute;display:none;background:" + SHADE + ";"; return d; };
     const dimT = mkDim(), dimB = mkDim(), dimL = mkDim(), dimR = mkDim();
     const box = document.createElement("div");
-    box.style.cssText = "position:absolute;display:none;border:2px solid #6366f1;outline:1px solid rgba(255,255,255,.5);";
+    box.style.cssText = "position:absolute;display:none;border:2px solid #14b8a6;outline:1px solid rgba(255,255,255,.5);";
     const tag = document.createElement("div");
-    tag.style.cssText = "position:absolute;display:none;background:#4f46e5;color:#fff;font:600 12px/1 system-ui,Segoe UI,Arial;padding:4px 7px;border-radius:5px;white-space:nowrap;";
+    tag.style.cssText = "position:absolute;display:none;background:#0f766e;color:#fff;font:600 12px/1 system-ui,Segoe UI,Arial;padding:4px 7px;border-radius:5px;white-space:nowrap;";
     const hint = document.createElement("div");
     hint.textContent = "Drag to select — reach an edge to scroll   ·   Esc to cancel";
     hint.style.cssText = "position:absolute;top:14px;left:50%;transform:translateX(-50%);background:rgba(17,24,39,.94);color:#fff;font:600 13px/1 system-ui,Segoe UI,Arial;padding:9px 15px;border-radius:9px;";
@@ -513,9 +513,9 @@ function fpcSelectElement() {
     const de = document.documentElement;
     const dpr = window.devicePixelRatio || 1;
     const box = document.createElement("div");
-    box.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;display:none;border:2px solid #6366f1;background:rgba(99,102,241,.14);box-shadow:0 0 0 2px rgba(255,255,255,.5),0 0 0 9999px rgba(15,23,42,.3);";
+    box.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;display:none;border:2px solid #14b8a6;background:rgba(20,184,166,.14);box-shadow:0 0 0 2px rgba(255,255,255,.5),0 0 0 9999px rgba(15,23,42,.3);";
     const tag = document.createElement("div");
-    tag.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;display:none;background:#4f46e5;color:#fff;font:600 12px/1 system-ui,Segoe UI,Arial;padding:4px 7px;border-radius:5px;white-space:nowrap;";
+    tag.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;display:none;background:#0f766e;color:#fff;font:600 12px/1 system-ui,Segoe UI,Arial;padding:4px 7px;border-radius:5px;white-space:nowrap;";
     const hint = document.createElement("div");
     hint.textContent = "Hover an element · click to capture · Esc to cancel";
     hint.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;top:14px;left:50%;transform:translateX(-50%);background:rgba(17,24,39,.94);color:#fff;font:600 13px/1 system-ui,Segoe UI,Arial;padding:9px 15px;border-radius:9px;";

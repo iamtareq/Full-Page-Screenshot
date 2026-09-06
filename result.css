@@ -9,11 +9,11 @@
   --border-strong: #d3d8e2;
   --text: #0f172a;
   --muted: #6b7280;
-  --accent: #6366f1;
-  --accent-2: #8b5cf6;
-  --accent-grad: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  --accent: #0d9488;
+  --accent-2: #14b8a6;
+  --accent-grad: linear-gradient(135deg, #0d9488 0%, #14b8a6 100%);
   --drive-grad: linear-gradient(135deg, #10b981 0%, #059669 100%);
-  --ring: rgba(99, 102, 241, .35);
+  --ring: rgba(13, 148, 136, .32);
   --checker: #dfe3ea;
   --shadow-sm: 0 1px 2px rgba(16, 24, 40, .06), 0 1px 3px rgba(16, 24, 40, .05);
   --shadow-md: 0 4px 12px rgba(16, 24, 40, .08), 0 2px 4px rgba(16, 24, 40, .05);
@@ -49,8 +49,8 @@ body {
   font: 14px/1.45 -apple-system, system-ui, "Segoe UI", Roboto, Arial, sans-serif;
   color: var(--text);
   background:
-    radial-gradient(1200px 600px at 15% -10%, rgba(99, 102, 241, .10), transparent 60%),
-    radial-gradient(1000px 500px at 100% 0%, rgba(139, 92, 246, .08), transparent 55%),
+    radial-gradient(1200px 600px at 15% -10%, rgba(13, 148, 136, .10), transparent 60%),
+    radial-gradient(1000px 500px at 100% 0%, rgba(20, 184, 166, .08), transparent 55%),
     linear-gradient(180deg, var(--bg-1), var(--bg-2));
   display: flex;
   flex-direction: column;
@@ -109,23 +109,81 @@ body {
 .tbtn.ghost:hover { background: var(--panel-2); color: var(--text); box-shadow: none; transform: none; }
 
 /* Download + format split */
-.group:has(.split) .primary { border-top-right-radius: 0; border-bottom-right-radius: 0; }
-.tbtn.split { padding: 10px 8px; border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  background: var(--accent); border: 0; color: #fff; box-shadow: 0 4px 14px var(--ring); }
-.tbtn.split:hover { filter: brightness(1.08); }
+/* ---- Download + format chooser -------------------------------------------
+   ONE flat slab. Both halves are transparent children of .dl-shell, which owns
+   the colour, the radius and the only shadow - so no gap, colour step or
+   independent hover can ever split it in two again. */
+.dl { position: relative; display: inline-flex; }
+.dl-shell {
+  display: inline-flex; align-items: stretch; border-radius: var(--radius-sm);
+  /* deepened teal so 13px bold white text clears 4.5:1 on it */
+  background: #0c8277;
+  box-shadow: 0 2px 6px rgba(13, 148, 136, .26);
+}
+.dl-main, .dl-caret {
+  display: inline-flex; align-items: center; gap: 8px; margin: 0;
+  border: 0; background: transparent; color: #fff; cursor: pointer;
+  font: 650 13px/1 inherit; white-space: nowrap;
+  transition: background .13s ease;
+}
+.dl-main  { padding: 10px 15px; border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+.dl-caret { position: relative; padding: 10px 11px; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+/* the only separation: a short hairline fold */
+.dl-caret::before {
+  content: ""; position: absolute; left: 0; top: 9px; bottom: 9px;
+  width: 1px; background: rgba(255, 255, 255, .28);
+}
+.dl-main:hover, .dl-caret:hover   { background: rgba(255, 255, 255, .12); }
+.dl-main:active, .dl-caret:active { background: rgba(255, 255, 255, .04); }
+/* An INSET white ring: always legible on teal, and it cannot round a half's
+   corners and make it look like a chip floating inside the slab. */
+.dl-main:focus-visible, .dl-caret:focus-visible {
+  outline: 2px solid #fff; outline-offset: -4px;
+}
+.dl-main:disabled, .dl-caret:disabled { opacity: .55; cursor: default; }
+.dl-ico, .dl-chev { flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.dl-ico  { width: 16px; height: 16px; }
+.dl-chev { width: 14px; height: 14px; transition: transform .15s ease; }
+.dl:has(.dl-menu:not([hidden])) .dl-chev { transform: rotate(180deg); }
+.dl-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
-.menu {
-  position: absolute; top: calc(100% + 8px); left: 0; z-index: 30; min-width: 172px;
-  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
-  box-shadow: var(--shadow-lg); overflow: hidden; padding: 5px;
-  animation: pop .12s ease;
+.dl-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 40; min-width: 208px;
+  padding: 4px; background: var(--panel); border: 1px solid var(--border-strong);
+  border-radius: var(--radius); box-shadow: var(--shadow-lg); animation: pop .12s ease;
 }
 @keyframes pop { from { opacity: 0; transform: translateY(-4px) scale(.98); } to { opacity: 1; transform: none; } }
-.menu button {
-  display: block; width: 100%; text-align: left; padding: 9px 12px; border-radius: 7px;
-  background: none; border: 0; color: var(--text); font: inherit; font-size: 13px; cursor: pointer;
+.dl-menu-head {
+  padding: 8px 10px 6px; font: 700 10px/1 inherit; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted);
 }
-.menu button:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.dl-menu > button {
+  display: flex; align-items: center; gap: 10px; width: 100%; margin: 0; padding: 8px 10px;
+  border: 0; border-radius: 7px; background: transparent; color: var(--text);
+  font: 500 13px/1 inherit; text-align: left; cursor: pointer; transition: background .12s ease;
+}
+.dl-menu > button:hover { background: var(--panel-2); }
+.dl-menu > button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.dl-name { min-width: 32px; font-weight: 700; font-size: 12.5px; }
+.dl-note { font-size: 11px; font-weight: 400; color: var(--muted); }
+/* "you are here": the format that will actually be downloaded */
+.dl-tick { margin-left: auto; width: 15px; height: 15px; flex: 0 0 auto; opacity: 0;
+  fill: none; stroke: var(--accent); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.dl-menu > button[aria-current="true"] { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.dl-menu > button[aria-current="true"] .dl-tick { opacity: 1; }
+.dl-menu > button[aria-current="true"] .dl-name { color: var(--accent); }
+
+/* On a dark ground a dark teal button sinks into the page, but no teal light
+   enough to stand out can carry WHITE text at 4.5:1 - so flip the polarity:
+   a bright face with dark text (9:1), the same trick the popup's update button uses. */
+@media (prefers-color-scheme: dark) {
+  .dl-shell { background: #2dd4bf; box-shadow: 0 2px 12px rgba(45, 212, 191, .28); }
+  .dl-main, .dl-caret { color: #04211f; }
+  .dl-caret::before { background: rgba(4, 33, 31, .28); }
+  .dl-main:hover, .dl-caret:hover { background: rgba(4, 33, 31, .12); }
+  .dl-main:active, .dl-caret:active { background: rgba(4, 33, 31, .04); }
+  .dl-main:focus-visible, .dl-caret:focus-visible { outline-color: #04211f; }
+}
 
 .quality label, .zoom span, .meta span { font-size: 12px; color: var(--muted); font-weight: 600; }
 .quality input { width: 108px; accent-color: var(--accent); }

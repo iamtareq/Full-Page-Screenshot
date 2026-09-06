@@ -347,7 +347,7 @@ function drawInfoBar(ctx, w, barH) {
   ctx.fillStyle = "#0f172a";
   ctx.fillRect(0, 0, w, barH);
   const line = Math.max(2, Math.round(2 * dpr));
-  ctx.fillStyle = "#6366f1";
+  ctx.fillStyle = "#14b8a6";
   ctx.fillRect(0, barH - line, w, line);
   const pad = Math.round(16 * dpr);
   const fs = Math.round(13 * dpr);
@@ -485,6 +485,11 @@ function applyZoom() {
 function reflectFormat() {
   el("downloadLabel").textContent = "Download " + currentFormat.toUpperCase();
   el("qualityGroup").hidden = !(currentFormat === "jpg" || currentFormat === "pdf");
+  // Mark the live format in the list, so opening it answers "which one am I on?"
+  const m = el("formatMenu");
+  if (m) m.querySelectorAll("button[data-fmt]").forEach((b) => {
+    b.setAttribute("aria-current", b.dataset.fmt === currentFormat ? "true" : "false");
+  });
 }
 
 function wireTools() {
@@ -879,8 +884,10 @@ function wireAnnotation() {
       annotTool = "stamp";
       clearActiveAnnot();
       stampKind = btn.dataset.stamp;
-      const s = STAMPS[stampKind];
-      if (s) { annotColor = s.color; [...el("acolors").children].forEach((c) => c.classList.remove("active")); }
+      // A stamp carries its own meaning-colour (see the "stamp" branch of onAnnotDown,
+      // which reads STAMPS[stampKind].color directly), so picking one must NOT touch
+      // annotColor - doing that silently repainted the next shape you drew in the
+      // stamp's colour and left no swatch highlighted.
       document.querySelectorAll(".atool").forEach((b) => b.classList.remove("active"));
       document.querySelectorAll(".astamp").forEach((b) => b.classList.toggle("active", b === btn));
     });
@@ -1376,7 +1383,7 @@ function renderAnnots() {
     const ctx = annotCtx; ctx.save();
     ctx.setLineDash([6 * s, 4 * s]);
     ctx.lineWidth = 1.5 * s;
-    ctx.strokeStyle = "rgba(99,102,241,.95)";
+    ctx.strokeStyle = "rgba(20,184,166,.95)";
     ctx.strokeRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2);
     ctx.setLineDash([]);
     const hs = 4.5 * s;                       // handle half-size, constant on screen
