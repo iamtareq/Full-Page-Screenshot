@@ -102,6 +102,23 @@ try {
   if (_v) _v.textContent = "v" + chrome.runtime.getManifest().version;
 } catch (_) {}
 
+const _recent = document.getElementById("recentLink");
+// Recent is opt-in, so only offer it once it is switched on in Settings.
+if (_recent) {
+  _recent.hidden = true;
+  try {
+    chrome.storage.sync.get("settings", (s) => {
+      const on = !!(s && s.settings && s.settings.recentEnabled);
+      _recent.hidden = !on;
+    });
+  } catch (_) {}
+}
+if (_recent) _recent.addEventListener("click", (e) => {
+  e.preventDefault();
+  chrome.tabs.create({ url: chrome.runtime.getURL("result.html?recent=1") });
+  window.close();
+});
+
 const _updBtn = document.getElementById("updBtn");
 if (_updBtn) _updBtn.addEventListener("click", runUpdate);
 

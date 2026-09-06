@@ -43,6 +43,11 @@ let stampLocked = false;     // info-bar toggle frozen after crop / annotate
 let tileChain = Promise.resolve(); // serializes async tile draws; finalize waits on it
 let infoBarLink = null;      // {x,y,w,h,uri} device px of the URL text (for PDF links)
 let lastDriveLink = null;    // last uploaded Drive link (for the notification click)
+let captureTime = null;      // set when an older capture is restored, so the info bar keeps ITS time
+let captureSettled = false;
+let recentEnabled = false;   // Settings > "Keep recent captures" - opt-in, off until enabled
+let currentRecentId = null;  // the Recent row this editor writes its annotations back into
+let recentSaveTimer = null;  // true once the job finished (or failed); restoring a Recent capture before that would let late tiles paint over it
 
 // Annotation state (single-segment images only)
 let annotCanvas = null, annotCtx = null;
@@ -51,10 +56,18 @@ let annotTool = "rect";
 let annotColor = "#e11d48";
 let annotWidth = 8;
 let annotations = [];
+// Undo/redo keeps SNAPSHOTS of the whole annotation list, not just the last item,
+// because edits like moving or resizing a shape change it in place - popping the
+// last item could never undo those.
+let undoStack = [];
 let redoStack = [];
+const HISTORY_LIMIT = 60;
+let exportingAnnots = false;   // true while flattening: skip on-screen-only selection UI
 let liveAnnot = null;
 let activePointerId = null;
-let activeAnnot = null;      // last shape drawn — stays adjustable (Paint-style) until you draw again
+let activeAnnot = null;      // the selected / just-drawn shape (Paint-style live editing)
+let activeTouched = false;   // has the active shape been edited in place yet? (one undo step per edit session)
+let drag = null;             // { a, sx, sy, orig, moved } while moving a shape with the Select tool
 const ANNOT_COLORS = ["#e11d48", "#f97316", "#facc15", "#22c55e", "#3b82f6", "#111827", "#ffffff"];
 // QA bug-report stamps — click to drop a labelled pill (kind → label + colour).
 const STAMPS = {
@@ -77,12 +90,18 @@ async function init() {
   quality = defaultSettings.jpegQuality || 0.92;
   infoBar = defaultSettings.infoBar !== false;
   envBar = defaultSettings.envBar !== false;
+  recentEnabled = defaultSettings.recentEnabled === true;   // strictly opt-in
+  const rbtn = el("recentBtn"); if (rbtn) rbtn.hidden = !recentEnabled;
   el("quality").value = quality;
   el("qualityVal").textContent = Math.round(quality * 100) + "%";
   reflectFormat();
   wireTools();
 
-  if (!jobId) return showError("Missing capture reference. Please try capturing again.");
+  if (!jobId) {
+    settleCapture();
+    if (params.get("recent") === "1") { progressWrap.hidden = true; openRecent(); return; }
+    return showError("Missing capture reference. Please try capturing again.");
+  }
 
   const port = chrome.runtime.connect({ name: "fpc-result" });
   port.onMessage.addListener(onPortMessage);
@@ -95,6 +114,11 @@ async function init() {
     }
   });
   port.postMessage({ type: "ready", job: jobId });
+  const rb = el("recentBtn"); if (rb) rb.disabled = true;   // re-enabled by settleCapture()
+}
+function settleCapture() {
+  captureSettled = true;
+  const rb = el("recentBtn"); if (rb) { rb.disabled = false; rb.hidden = !recentEnabled; }
 }
 
 /* ------------------------- Port handling ------------------------- */
@@ -265,7 +289,8 @@ function finalize() {
   updateDims();
   applyZoom();
   if (truncated) toast("This page is extremely wide — the right edge was cut to the browser's canvas limit.");
-  window.addEventListener("resize", () => { if (zoom === null) applyZoom(); });
+  settleCapture();
+  saveRecent();              // keep the last few captures so a closed tab isn't a lost capture
 }
 
 function updateDims() {
@@ -332,7 +357,7 @@ function drawInfoBar(ctx, w, barH) {
   ctx.textBaseline = "middle";
   ctx.font = `600 ${fs}px system-ui, "Segoe UI", Arial, sans-serif`;
 
-  let timeStr = new Date().toLocaleString();
+  let timeStr = (captureTime || new Date()).toLocaleString();
   let timeW = ctx.measureText(timeStr).width;
   let maxUrlW = w - pad * 3 - timeW;
   if (maxUrlW < 40) {           // bar too narrow for both — keep the URL, drop the time
@@ -405,12 +430,19 @@ function reflectInfoBarBtn() {
 }
 
 // Shift every annotation's Y by dy (used when the top bar is added/removed).
-function shiftAnnotations(dy) {
-  for (const a of annotations) {
+function shiftAnnotList(list, dy) {
+  for (const a of list) {
     if (typeof a.y1 === "number") a.y1 += dy;
     if (typeof a.y2 === "number") a.y2 += dy;
     if (a.points) for (const p of a.points) p.y += dy;
   }
+}
+// The undo/redo snapshots are independent copies in the same coordinate space, so
+// they must move with the live list - otherwise undo restores shapes barH px off.
+function shiftAnnotations(dy) {
+  shiftAnnotList(annotations, dy);
+  for (const s of undoStack) shiftAnnotList(s, dy);
+  for (const s of redoStack) shiftAnnotList(s, dy);
 }
 
 function toggleInfoBar() {
@@ -456,6 +488,9 @@ function reflectFormat() {
 }
 
 function wireTools() {
+  window.addEventListener("resize", () => { if (zoom === null && segments.length) applyZoom(); });
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushRecentSave(); });
+  window.addEventListener("pagehide", flushRecentSave);
   el("download").addEventListener("click", () => doDownload(currentFormat));
   el("formatMenuBtn").addEventListener("click", (e) => {
     e.stopPropagation();
@@ -481,6 +516,16 @@ function wireTools() {
   el("print").addEventListener("click", doPrint);
   el("drive").addEventListener("click", uploadToDrive);
   el("copyLink").addEventListener("click", copyDriveLink);
+  el("recentBtn").addEventListener("click", toggleRecent);
+  // Click anywhere else (canvas, toolbar, page) closes the drawer, like any popover.
+  // Capture phase so it still closes even when the click is handled elsewhere.
+  document.addEventListener("pointerdown", (e) => {
+    const d = el("recentDrawer"), b = el("recentBtn");
+    if (!d || d.hidden) return;
+    if (d.contains(e.target) || (b && b.contains(e.target))) return;
+    closeRecent();
+  }, true);
+  window.addEventListener("blur", () => { const d = el("recentDrawer"); if (d && !d.hidden) closeRecent(); });
   try {
     if (chrome.notifications && chrome.notifications.onClicked) {
       chrome.notifications.onClicked.addListener(() => { if (lastDriveLink) window.open(lastDriveLink, "_blank"); });
@@ -503,6 +548,7 @@ function wireTools() {
     if (t && (/^(input|textarea|select)$/i.test(t.tagName) || t.isContentEditable)) return;
     const ctrl = e.ctrlKey || e.metaKey;
     const k = e.key.toLowerCase();
+    if (e.key === "Escape" && el("recentDrawer") && !el("recentDrawer").hidden) { closeRecent(); return; }
     const click = (id) => { const b = el(id); if (b && !b.disabled) b.click(); };
 
     // ---- Ctrl combos (work whether or not the annotation bar is open) ----
@@ -542,7 +588,7 @@ function wireTools() {
           return;
         }
         // single-letter tool picks, like most drawing apps
-        const TOOLKEYS = { r: "rect", o: "ellipse", a: "arrow", l: "line", p: "pen", h: "highlight", t: "text", n: "step", b: "blur" };
+        const TOOLKEYS = { v: "select", r: "rect", o: "ellipse", a: "arrow", l: "line", p: "pen", h: "highlight", t: "text", n: "step", b: "blur", c: "callout" };
         const tool = TOOLKEYS[k];
         if (tool) {
           const btn = document.querySelector('.atool[data-tool="' + tool + '"]');
@@ -777,7 +823,13 @@ function applyCrop() {
   // Replace the old canvas + annotation layer (annotations are now baked in).
   displayed.remove();
   if (annotCanvas) { annotCanvas.remove(); annotCanvas = null; annotCtx = null; }
-  annotations = []; redoStack = [];
+  // Write the pre-crop markup out against the uncropped image it was actually drawn
+  // on, then let go of that Recent row: from here the picture on screen no longer
+  // matches the stored blob, so anything drawn next would be saved at crop-space
+  // coordinates (and shifted by a bar that is now baked into the pixels).
+  flushRecentSave();
+  currentRecentId = null;
+  annotations = []; undoStack = []; redoStack = [];
   canvasHost.insertBefore(out, cropOverlay);
   segments = [{ canvas: out, ctx, startY: 0, height: sh }];
   fullWpx = sw; fullHpx = sh;
@@ -815,6 +867,7 @@ function wireAnnotation() {
     btn.addEventListener("click", () => {
       annotTool = btn.dataset.tool;
       clearActiveAnnot();
+      applyToolCursor();
       document.querySelectorAll(".atool").forEach((b) => b.classList.remove("active"));
       document.querySelectorAll(".astamp").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
@@ -879,6 +932,7 @@ function startAnnot() {
   if (segments.length !== 1) return;
   endCrop();
   if (!annotCanvas) setupAnnotationLayer();
+  applyToolCursor();
   annotating = true;
   el("annotbar").hidden = false;
   el("annotate").classList.add("on");
@@ -888,6 +942,7 @@ function startAnnot() {
 function exitAnnot() {
   annotating = false;
   liveAnnot = null;
+  cancelDrag();
   clearActiveAnnot();
   el("annotbar").hidden = true;
   el("annotate").classList.remove("on");
@@ -922,18 +977,48 @@ function evtToImg(e) {
   };
 }
 
+function beginDrag(a, p, e, handle) {
+  setActiveAnnot(a);
+  activePointerId = e.pointerId;
+  try { annotCanvas.setPointerCapture(e.pointerId); } catch (_) {}
+  drag = { a: a, sx: p.x, sy: p.y, moved: false, handle: handle || null,
+    orig: { x1: a.x1, y1: a.y1, x2: a.x2, y2: a.y2, bbox: annotBBox(a),
+            points: a.points ? a.points.map((q) => ({ x: q.x, y: q.y })) : null } };
+  annotCanvas.style.cursor = handle ? (HANDLE_CURSOR[handle] || "move") : "move";
+  renderAnnots();
+}
+
 function onAnnotDown(e) {
   if (!annotating || !annotCanvas || e.target !== annotCanvas) return;
   if (e.button !== 0 || !e.isPrimary) return;   // primary mouse button / first touch only
   if (liveAnnot) return;                         // one stroke at a time (ignore extra touches)
   e.preventDefault();
   const p = evtToImg(e);
+  // A handle of the selected shape wins over everything else: that is a resize.
+  if (activeAnnot && annotations.includes(activeAnnot)) {
+    const h = handleAt(p, activeAnnot);
+    if (h) { beginDrag(activeAnnot, p, e, h.id); return; }
+  }
+  // Paint-style: the shape you just drew stays live, so pressing on IT moves it -
+  // you don't have to switch to the Select tool first. Pressing anywhere else
+  // finalises it and starts a new shape as usual.
+  if (activeAnnot && annotTool !== "select" && hitTest(p) === activeAnnot) {
+    beginDrag(activeAnnot, p, e);
+    return;
+  }
   clearActiveAnnot();
+  if (annotTool === "select") {
+    // Click a shape to select it; drag to move it. Click empty space to deselect.
+    const hit = hitTest(p);
+    if (!hit) { renderAnnots(); return; }
+    beginDrag(hit, p, e);
+    return;
+  }
   if (annotTool === "text") return startText(e, p);
   if (annotTool === "step") { // click-to-drop, auto-numbered
     const a = { type: "step", color: annotColor, width: annotWidth * dpr, x1: p.x, y1: p.y };
+    pushHistory();
     annotations.push(a);
-    redoStack = [];
     setActiveAnnot(a);
     renderAnnots();
     return;
@@ -941,8 +1026,8 @@ function onAnnotDown(e) {
   if (annotTool === "stamp") { // click-to-drop QA stamp (BUG / PASS / FIXED / RE-TEST)
     const s = STAMPS[stampKind] || STAMPS.bug;
     const a = { type: "stamp", label: s.label, color: s.color, width: annotWidth * dpr, x1: p.x, y1: p.y };
+    pushHistory();
     annotations.push(a);
-    redoStack = [];
     setActiveAnnot(a);
     renderAnnots();
     return;
@@ -956,22 +1041,56 @@ function onAnnotDown(e) {
   };
 }
 function onAnnotMove(e) {
-  if (!annotating || !liveAnnot || e.pointerId !== activePointerId) return;
+  if (drag && e.pointerId === activePointerId) {
+    const p = evtToImg(e);
+    const dx = p.x - drag.sx, dy = p.y - drag.sy;
+    // Snapshot once, on the first real movement, so a plain click leaves no undo entry.
+    if (!drag.moved) { if (Math.hypot(dx, dy) < 1) return; drag.moved = true; pushHistory(); activeTouched = true; }
+    if (drag.handle) resizeAnnot(drag.a, drag.orig, drag.handle, dx, dy);
+    else translateAnnot(drag.a, drag.orig, dx, dy);
+    renderAnnots();
+    return;
+  }
+  if (!annotating) return;
+  if (!liveAnnot) {
+    // idle hover: show the move cursor over whatever a press would drag
+    if (annotCanvas && e.target === annotCanvas) {
+      const hp = evtToImg(e);
+      const onHandle = (activeAnnot && annotations.includes(activeAnnot)) ? handleAt(hp, activeAnnot) : null;
+      if (onHandle) { annotCanvas.style.cursor = HANDLE_CURSOR[onHandle.id] || "move"; return; }
+      const over = (annotTool === "select") ? hitTest(hp) : (activeAnnot && hitTest(hp) === activeAnnot ? activeAnnot : null);
+      annotCanvas.style.cursor = over ? "move" : ((annotTool === "select") ? "default" : "");
+    }
+    return;
+  }
+  if (e.pointerId !== activePointerId) return;
   const p = evtToImg(e);
   liveAnnot.x2 = p.x; liveAnnot.y2 = p.y;
   if (liveAnnot.type === "pen" || liveAnnot.type === "highlight") liveAnnot.points.push(p);
   renderAnnots();
 }
 function onAnnotUp(e) {
+  if (drag && (!e || e.pointerId === activePointerId)) {
+    cancelDrag();               // also restores the Select-tool cursor
+    renderAnnots();
+    return;
+  }
   if (!liveAnnot || (e && e.pointerId !== activePointerId)) return;
   const a = liveAnnot; liveAnnot = null; activePointerId = null;
+  if (a.type === "callout") { renderAnnots(); return startCalloutText(a); }
   const freehand = a.type === "pen" || a.type === "highlight";
   const trivial = freehand ? a.points.length < 2 : (Math.abs(a.x2 - a.x1) < 3 && Math.abs(a.y2 - a.y1) < 3);
-  if (!trivial) { annotations.push(a); redoStack = []; setActiveAnnot(a); }
+  if (!trivial) { pushHistory(); annotations.push(a); setActiveAnnot(a); }
   renderAnnots();
 }
 function onAnnotCancel(e) {
   // Gesture taken over by the browser (scroll / pinch / palm) — discard the stroke.
+  if (drag && (!e || e.pointerId === activePointerId)) {
+    if (drag.moved) translateAnnot(drag.a, drag.orig, 0, 0);   // the gesture was taken over: put it back
+    cancelDrag();
+    renderAnnots();
+    return;
+  }
   if (!liveAnnot || (e && e.pointerId !== activePointerId)) return;
   liveAnnot = null; activePointerId = null;
   renderAnnots();
@@ -998,8 +1117,8 @@ function startText(e, p) {
     input.remove();
     if (val) {
       const ta = { type: "text", color: annotColor, x1: p.x, y1: p.y, size: sizeDev, text: val };
+      pushHistory();
       annotations.push(ta);
-      redoStack = [];
       setActiveAnnot(ta);
       renderAnnots();
     }
@@ -1015,35 +1134,260 @@ function startText(e, p) {
 // The most recently drawn annotation stays selected, so changing Size (or colour)
 // re-applies to IT instead of only affecting the next one. It is finalised as soon
 // as you start another shape, switch tool, undo/clear, or leave annotate mode.
+function cloneAnnots(list) {
+  return list.map((a) => {
+    const c = Object.assign({}, a);
+    if (a.points) c.points = a.points.map((p) => ({ x: p.x, y: p.y }));
+    return c;
+  });
+}
+// Call BEFORE mutating `annotations` so undo can restore the previous state.
+function pushHistory() {
+  undoStack.push(cloneAnnots(annotations));
+  if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
+  redoStack = [];
+  scheduleRecentSave();
+}
+
 function reflectActive() { const h = el("ahint"); if (h) h.hidden = !activeAnnot; }
-function setActiveAnnot(a) { activeAnnot = a || null; reflectActive(); }
-function clearActiveAnnot() { activeAnnot = null; reflectActive(); }
+function setActiveAnnot(a) { activeAnnot = a || null; activeTouched = false; reflectActive(); }
+function clearActiveAnnot() {
+  const had = !!activeAnnot;
+  activeAnnot = null; activeTouched = false; reflectActive();
+  if (had && annotCtx) renderAnnots();          // drop the dashed outline immediately
+}
+function touchActive() { if (!activeTouched) { pushHistory(); activeTouched = true; } }
+// The Select tool's drag must be dropped by anything that replaces or removes the
+// dragged object (undo/redo/delete/clear/leaving annotate), or it keeps moving a ghost.
+function cancelDrag() {
+  if (!drag) return;
+  try { if (annotCanvas && activePointerId != null) annotCanvas.releasePointerCapture(activePointerId); } catch (_) {}
+  drag = null; activePointerId = null;
+  applyToolCursor();
+}
+function applyToolCursor() { if (annotCanvas) annotCanvas.style.cursor = (annotTool === "select") ? "default" : ""; }
+function isLight(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "").trim());
+  if (!m) return false;
+  const n = parseInt(m[1], 16);
+  return (0.2126 * (n >> 16 & 255) + 0.7152 * (n >> 8 & 255) + 0.0722 * (n & 255)) / 255 > 0.62;
+}
 function deleteActiveAnnot() {
+  cancelDrag();
   if (!activeAnnot) return false;
   const i = annotations.indexOf(activeAnnot);
-  if (i >= 0) { annotations.splice(i, 1); redoStack = []; }
+  if (i >= 0) { pushHistory(); annotations.splice(i, 1); }
   clearActiveAnnot();
   renderAnnots();
   return true;
 }
 function applyActiveWidth() {
   if (!activeAnnot) return;
-  // text carries its own font size; everything else uses the stroke width
-  if (activeAnnot.type === "text") activeAnnot.size = Math.max(16, annotWidth * dpr * 2.4);
-  else activeAnnot.width = annotWidth * dpr;
+  // text / callout carry a font size; everything else uses the stroke width
+  const isLabel = activeAnnot.type === "text" || activeAnnot.type === "callout";
+  const next = isLabel ? Math.max(16, annotWidth * dpr * 2.4) : annotWidth * dpr;
+  if ((isLabel ? activeAnnot.size : activeAnnot.width) === next) return;   // no change, no undo step
+  touchActive();
+  if (isLabel) activeAnnot.size = next; else activeAnnot.width = next;
   renderAnnots();
 }
 function applyActiveColour() {
   if (!activeAnnot || activeAnnot.type === "stamp") return;  // stamps keep their meaning-colour
+  if (activeAnnot.color === annotColor) return;
+  touchActive();
   activeAnnot.color = annotColor;
   renderAnnots();
+}
+
+/* ---- Select / move: geometry helpers ---- */
+function labelMetrics(a) {
+  // Same maths as drawAnnot, so the box we test/outline is the box that gets drawn.
+  const ctx = annotCtx; ctx.save();
+  let m;
+  if (a.type === "text") {
+    ctx.font = `600 ${a.size}px system-ui, "Segoe UI", Arial, sans-serif`;
+    m = { w: ctx.measureText(a.text || "").width, h: a.size };
+  } else if (a.type === "stamp") {
+    const fs = Math.max(15, (a.width || 6) * 2.4);
+    ctx.font = `800 ${Math.round(fs)}px system-ui, "Segoe UI", Arial, sans-serif`;
+    m = { w: Math.round(ctx.measureText(a.label || "BUG").width + Math.round(fs * 0.55) * 2), h: Math.round(fs + Math.round(fs * 0.34) * 2) };
+  } else {                                   // callout
+    const fs = a.size || 20;
+    ctx.font = `700 ${Math.round(fs)}px system-ui, "Segoe UI", Arial, sans-serif`;
+    m = { w: Math.round(ctx.measureText(a.text || "").width + Math.round(fs * 0.55) * 2), h: Math.round(fs + Math.round(fs * 0.42) * 2) };
+  }
+  ctx.restore();
+  return m;
+}
+function annotBBox(a) {
+  switch (a.type) {
+    case "pen": case "highlight": {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const p of a.points || []) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
+      if (!isFinite(x0)) return { x: a.x1, y: a.y1, w: 0, h: 0 };
+      return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    }
+    case "text": case "stamp": case "callout": { const m = labelMetrics(a); return { x: a.x1, y: a.y1, w: m.w, h: m.h }; }
+    case "step": { const r = Math.max(14, (a.width || 6) * 2.4); return { x: a.x1 - r, y: a.y1 - r, w: 2 * r, h: 2 * r }; }
+    default: { const x = Math.min(a.x1, a.x2), y = Math.min(a.y1, a.y2); return { x, y, w: Math.abs(a.x2 - a.x1), h: Math.abs(a.y2 - a.y1) }; }
+  }
+}
+function distToSeg(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1, dy = y2 - y1, l2 = dx * dx + dy * dy;
+  let t = l2 ? ((px - x1) * dx + (py - y1) * dy) / l2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+}
+// image-px per screen-px, so click tolerance and outline thickness stay constant on screen
+function screenScale() { const r = annotCanvas.getBoundingClientRect(); return r.width ? annotCanvas.width / r.width : 1; }
+function hitTest(p) {
+  const tol = 8 * screenScale();
+  for (let i = annotations.length - 1; i >= 0; i--) {         // topmost first
+    const a = annotations[i];
+    const half = (a.width || 6) / 2;
+    if (a.type === "line" || a.type === "arrow") {
+      if (distToSeg(p.x, p.y, a.x1, a.y1, a.x2, a.y2) <= half + tol) return a;
+      continue;
+    }
+    if (a.type === "pen" || a.type === "highlight") {
+      const pts = a.points || [], w = a.type === "highlight" ? half * 2.4 : half;
+      for (let k = 1; k < pts.length; k++) if (distToSeg(p.x, p.y, pts[k - 1].x, pts[k - 1].y, pts[k].x, pts[k].y) <= w + tol) return a;
+      continue;
+    }
+    const b = annotBBox(a);
+    const pad = (a.type === "rect" || a.type === "ellipse" || a.type === "blur") ? half + tol : tol;
+    if (p.x >= b.x - pad && p.x <= b.x + b.w + pad && p.y >= b.y - pad && p.y <= b.y + b.h + pad) return a;
+    if (a.type === "callout" && a.text && a.x2 != null) {    // ...or on its tail
+      const tailW = Math.max(6, (a.size || 20) * 0.32);
+      if (distToSeg(p.x, p.y, b.x + b.w / 2, b.y + b.h / 2, a.x2, a.y2) <= tailW + tol) return a;
+    }
+  }
+  return null;
+}
+// --- resize handles ---------------------------------------------------------
+// Box shapes get 8 handles, lines/arrows get one per end, freehand gets 4 corners
+// (proportional scale). Text / stamps / step badges / callouts size by font, so the
+// Size slider (and [ / ]) is their handle - they get none.
+const HANDLE_CURSOR = { nw: "nwse-resize", se: "nwse-resize", ne: "nesw-resize", sw: "nesw-resize",
+  n: "ns-resize", s: "ns-resize", e: "ew-resize", w: "ew-resize", p1: "move", p2: "move" };
+
+function handlesFor(a) {
+  if (!a) return [];
+  if (a.type === "line" || a.type === "arrow") {
+    return [{ id: "p1", x: a.x1, y: a.y1 }, { id: "p2", x: a.x2, y: a.y2 }];
+  }
+  if (a.type === "text" || a.type === "stamp" || a.type === "callout" || a.type === "step") return [];
+  const b = annotBBox(a);
+  const mx = b.x + b.w / 2, my = b.y + b.h / 2, r = b.x + b.w, bt = b.y + b.h;
+  if (a.type === "pen" || a.type === "highlight") {
+    return [{ id: "nw", x: b.x, y: b.y }, { id: "ne", x: r, y: b.y }, { id: "se", x: r, y: bt }, { id: "sw", x: b.x, y: bt }];
+  }
+  return [
+    { id: "nw", x: b.x, y: b.y }, { id: "n", x: mx, y: b.y }, { id: "ne", x: r, y: b.y },
+    { id: "e", x: r, y: my }, { id: "se", x: r, y: bt }, { id: "s", x: mx, y: bt },
+    { id: "sw", x: b.x, y: bt }, { id: "w", x: b.x, y: my }
+  ];
+}
+
+function handleAt(p, a) {
+  const tol = 9 * screenScale();
+  for (const h of handlesFor(a)) {
+    if (Math.abs(p.x - h.x) <= tol && Math.abs(p.y - h.y) <= tol) return h;
+  }
+  return null;
+}
+
+// Apply a handle drag. `orig` is the pre-drag geometry captured in beginDrag.
+function resizeAnnot(a, orig, id, dx, dy) {
+  if (id === "p1") { a.x1 = orig.x1 + dx; a.y1 = orig.y1 + dy; return; }
+  if (id === "p2") { a.x2 = orig.x2 + dx; a.y2 = orig.y2 + dy; return; }
+  const b = orig.bbox;
+  let x = b.x, y = b.y, w = b.w, h = b.h;
+  if (id.indexOf("w") >= 0) { x = b.x + dx; w = b.w - dx; }
+  if (id.indexOf("e") >= 0) { w = b.w + dx; }
+  if (id.indexOf("n") >= 0) { y = b.y + dy; h = b.h - dy; }
+  if (id.indexOf("s") >= 0) { h = b.h + dy; }
+  const min = 6 * screenScale();
+  if (w < min) { if (id.indexOf("w") >= 0) x = b.x + b.w - min; w = min; }
+  if (h < min) { if (id.indexOf("n") >= 0) y = b.y + b.h - min; h = min; }
+  if (a.type === "pen" || a.type === "highlight") {
+    // scale every point about the corner that stayed put
+    const ax = (id.indexOf("w") >= 0) ? b.x + b.w : b.x;
+    const ay = (id.indexOf("n") >= 0) ? b.y + b.h : b.y;
+    const nax = (id.indexOf("w") >= 0) ? x + w : x;
+    const nay = (id.indexOf("n") >= 0) ? y + h : y;
+    const sx = b.w > 0.01 ? w / b.w : 1, sy = b.h > 0.01 ? h / b.h : 1;
+    a.points = (orig.points || []).map((q) => ({ x: nax + (q.x - ax) * sx, y: nay + (q.y - ay) * sy }));
+    a.x1 = x; a.y1 = y; a.x2 = x + w; a.y2 = y + h;
+    return;
+  }
+  a.x1 = x; a.y1 = y; a.x2 = x + w; a.y2 = y + h;
+}
+
+function translateAnnot(a, orig, dx, dy) {
+  a.x1 = orig.x1 + dx; a.y1 = orig.y1 + dy;
+  if (orig.x2 != null) { a.x2 = orig.x2 + dx; a.y2 = orig.y2 + dy; }
+  if (orig.points) a.points = orig.points.map((q) => ({ x: q.x + dx, y: q.y + dy }));
+}
+
+// After dragging a callout (bubble anchor -> what it points at), ask for the text.
+function startCalloutText(a) {
+  const scale = annotCanvas.getBoundingClientRect().width / annotCanvas.width;
+  const sizeDev = Math.max(16, annotWidth * dpr * 2.4);
+  const input = document.createElement("input");
+  input.className = "annot-text-input";
+  input.type = "text";
+  input.placeholder = "Comment...";
+  input.style.left = (a.x1 * scale) + "px";
+  input.style.top = (a.y1 * scale) + "px";
+  input.style.fontSize = Math.max(11, sizeDev * scale) + "px";
+  input.style.color = isLight(a.color) ? "#111827" : a.color;
+  canvasHost.appendChild(input);
+  setTimeout(() => input.focus(), 0);
+  let done = false;
+  const commit = () => {
+    if (done) return; done = true;
+    const val = input.value.trim();
+    input.remove();
+    if (val) {
+      const ca = { type: "callout", color: a.color, x1: a.x1, y1: a.y1, x2: a.x2, y2: a.y2, size: sizeDev, text: val };
+      pushHistory();
+      annotations.push(ca);
+      setActiveAnnot(ca);
+    }
+    renderAnnots();
+  };
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); commit(); }
+    else if (ev.key === "Escape") { input.value = ""; commit(); }
+  });
+  input.addEventListener("blur", commit);
 }
 
 function renderAnnots() {
   if (!annotCtx) return;
   annotCtx.clearRect(0, 0, annotCanvas.width, annotCanvas.height);
   for (const a of annotations) drawAnnot(a);
-  if (liveAnnot) drawAnnot(liveAnnot);
+  if (liveAnnot && !exportingAnnots) drawAnnot(liveAnnot);   // uncommitted stroke never exports
+  // Dashed outline around the selected / live shape. Screen-only: flatten() re-renders
+  // with exportingAnnots=true, so this never reaches a download, copy or Drive upload.
+  if (activeAnnot && !exportingAnnots && annotations.includes(activeAnnot)) {
+    const b = annotBBox(activeAnnot), s = screenScale(), pad = 6 * s;
+    const ctx = annotCtx; ctx.save();
+    ctx.setLineDash([6 * s, 4 * s]);
+    ctx.lineWidth = 1.5 * s;
+    ctx.strokeStyle = "rgba(99,102,241,.95)";
+    ctx.strokeRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2);
+    ctx.setLineDash([]);
+    const hs = 4.5 * s;                       // handle half-size, constant on screen
+    for (const h of handlesFor(activeAnnot)) {
+      ctx.fillStyle = "#fff";
+      ctx.lineWidth = 1.5 * s;
+      ctx.fillRect(h.x - hs, h.y - hs, hs * 2, hs * 2);
+      ctx.strokeRect(h.x - hs, h.y - hs, hs * 2, hs * 2);
+    }
+    ctx.restore();
+  }
 }
 
 function drawAnnot(a) {
@@ -1105,6 +1449,49 @@ function drawAnnot(a) {
       ctx.font = `700 ${Math.round(r * 1.15)}px system-ui, "Segoe UI", Arial, sans-serif`;
       ctx.textAlign = "center"; ctx.textBaseline = "middle";
       ctx.fillText(String(n), a.x1, a.y1 + r * 0.06);
+      break;
+    }
+    case "callout": {
+      // While dragging there is no text yet - just preview the leader line.
+      if (!a.text) {
+        ctx.setLineDash([6, 4]);
+        ctx.lineWidth = Math.max(2, (a.width || 6) * 0.5);
+        ctx.beginPath(); ctx.moveTo(a.x1, a.y1); ctx.lineTo(a.x2, a.y2); ctx.stroke();
+        ctx.setLineDash([]);
+        break;
+      }
+      const cfs = a.size || 20;
+      ctx.font = `700 ${Math.round(cfs)}px system-ui, "Segoe UI", Arial, sans-serif`;
+      const cpadX = Math.round(cfs * 0.55), cpadY = Math.round(cfs * 0.42);
+      const ctw = ctx.measureText(a.text).width;
+      const cbw = Math.round(ctw + cpadX * 2), cbh = Math.round(cfs + cpadY * 2);
+      const cbx = a.x1, cby = a.y1;
+      const crr = Math.round(Math.min(cbh * 0.35, 14));
+      // Tail first, so the bubble covers its base.
+      const mx = cbx + cbw / 2, my = cby + cbh / 2;
+      const ddx = (a.x2 == null ? mx : a.x2) - mx, ddy = (a.y2 == null ? my : a.y2) - my;
+      const outside = Math.abs(ddx) > cbw / 2 + 2 || Math.abs(ddy) > cbh / 2 + 2;
+      if (outside) {
+        const t = Math.min((cbw / 2) / Math.max(0.001, Math.abs(ddx)), (cbh / 2) / Math.max(0.001, Math.abs(ddy)));
+        const ex = mx + ddx * t, ey = my + ddy * t;          // where the tail leaves the bubble
+        const ang = Math.atan2(ddy, ddx);
+        const half = Math.max(6, cfs * 0.32);
+        ctx.beginPath();
+        ctx.moveTo(ex - Math.sin(ang) * half, ey + Math.cos(ang) * half);
+        ctx.lineTo(ex + Math.sin(ang) * half, ey - Math.cos(ang) * half);
+        ctx.lineTo(a.x2, a.y2);
+        ctx.closePath();
+        ctx.fillStyle = a.color; ctx.fill();
+      }
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(cbx, cby, cbw, cbh, crr); else ctx.rect(cbx, cby, cbw, cbh);
+      ctx.fillStyle = a.color; ctx.fill();
+      const light = isLight(a.color);
+      ctx.lineWidth = Math.max(2, Math.round(cfs * 0.08));
+      ctx.strokeStyle = light ? "rgba(17,24,39,.6)" : "rgba(255,255,255,.92)"; ctx.stroke();
+      ctx.fillStyle = light ? "#111827" : "#fff";
+      ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      ctx.fillText(a.text, cbx + cpadX, cby + cbh / 2 + Math.round(cfs * 0.03));
       break;
     }
     case "stamp": {
@@ -1169,20 +1556,256 @@ function drawBlur(ctx, x, y, w, h) {
   ctx.imageSmoothingEnabled = true;
 }
 
-function annotUndo() { clearActiveAnnot(); if (annotations.length) { redoStack.push(annotations.pop()); renderAnnots(); } }
-function annotRedo() { clearActiveAnnot(); if (redoStack.length) { annotations.push(redoStack.pop()); renderAnnots(); } }
-function annotClear() { clearActiveAnnot(); annotations = []; redoStack = []; renderAnnots(); }
+function annotUndo() {
+  cancelDrag();
+  if (!undoStack.length) return;
+  redoStack.push(cloneAnnots(annotations));
+  annotations = undoStack.pop();
+  clearActiveAnnot();            // the snapshot holds fresh objects; the old reference is stale
+  renderAnnots();
+  scheduleRecentSave();
+}
+function annotRedo() {
+  cancelDrag();
+  if (!redoStack.length) return;
+  undoStack.push(cloneAnnots(annotations));
+  annotations = redoStack.pop();
+  clearActiveAnnot();
+  renderAnnots();
+  scheduleRecentSave();
+}
+function annotClear() {
+  cancelDrag();
+  if (!annotations.length) return;
+  pushHistory();
+  clearActiveAnnot();
+  annotations = [];
+  renderAnnots();
+}
 
 // Returns a canvas with annotations baked in, or the raw segment canvas if none.
 function flatten(seg) {
   if (!annotCanvas || annotations.length === 0 || seg !== segments[0]) return seg.canvas;
+  // Re-render without the on-screen-only selection outline, so it can never be
+  // baked into a download / clipboard copy / Drive upload.
+  exportingAnnots = true;
+  renderAnnots();
   const out = document.createElement("canvas");
   out.width = seg.canvas.width;
   out.height = seg.canvas.height;
   const c = out.getContext("2d");
   c.drawImage(seg.canvas, 0, 0);
   c.drawImage(annotCanvas, 0, 0);
+  exportingAnnots = false;
+  renderAnnots();
   return out;
+}
+
+/* ------------------------- Recent captures (last 3, IndexedDB) ------------------------- */
+// A closed result tab used to mean a lost capture (the background job expires in
+// 5 minutes). Every finished single-image capture is kept locally as a JPEG so the
+// last few can be reopened from the popup or the toolbar. Only 3 are kept: full-page
+// screenshots are big, and Drive is the real archive.
+const FPC_DB = "fpc-captures", FPC_STORE = "captures", RECENT_KEEP = 3;
+
+function dbUpgrade(req) {
+  const db = req.result;
+  if (!db.objectStoreNames.contains(FPC_STORE)) db.createObjectStore(FPC_STORE, { keyPath: "id" });
+}
+function dbOpen() {
+  return new Promise((res, rej) => {
+    // No explicit version: open whatever exists (and create it at v1 if it does not).
+    // Pinning a version here would throw VersionError once a heal has bumped it.
+    const r = indexedDB.open(FPC_DB);
+    r.onupgradeneeded = () => dbUpgrade(r);
+    r.onsuccess = () => {
+      const db = r.result;
+      if (db.objectStoreNames.contains(FPC_STORE)) return res(db);
+      // The database exists at this version but has no store - e.g. a deleteDatabase
+      // that was blocked and half-applied. Without this it would stay silently broken
+      // forever, so bump the version to get an upgrade event and create the store.
+      const next = db.version + 1;
+      db.close();
+      const r2 = indexedDB.open(FPC_DB, next);
+      r2.onupgradeneeded = () => dbUpgrade(r2);
+      r2.onsuccess = () => res(r2.result);
+      r2.onerror = () => rej(r2.error);
+    };
+    r.onerror = () => rej(r.error);
+  });
+}
+function dbRun(db, mode, fn) {
+  return new Promise((res, rej) => {
+    const tx = db.transaction(FPC_STORE, mode);
+    const req = fn(tx.objectStore(FPC_STORE));
+    tx.oncomplete = () => res(req ? req.result : undefined);
+    tx.onerror = () => rej(tx.error);
+  });
+}
+async function recentList() {
+  const db = await dbOpen();
+  const all = (await dbRun(db, "readonly", (st) => st.getAll())) || [];
+  return all.sort((a, b) => b.ts - a.ts);
+}
+async function recentGet(id) { const db = await dbOpen(); return dbRun(db, "readonly", (st) => st.get(id)); }
+async function recentDelete(id) { const db = await dbOpen(); await dbRun(db, "readwrite", (st) => { st.delete(id); }); }
+// Annotations are stored WITHOUT the info bar's offset, so a capture saved with the
+// bar on and reopened with it off (or vice versa) still lines up.
+function annotsForSave() {
+  const dy = infoBar ? -infoBarHeight() : 0;
+  const list = cloneAnnots(annotations);
+  if (dy) shiftAnnotList(list, dy);
+  return list;
+}
+async function recentUpdateAnnots(id, annots) {
+  const db = await dbOpen();
+  const rec = await dbRun(db, "readonly", (st) => st.get(id));
+  if (!rec) return;
+  rec.annots = annots;
+  await dbRun(db, "readwrite", (st) => { st.put(rec); });
+}
+// There is no "I am done annotating" moment, so save shortly after every change
+// instead. Dragging fires constantly, hence the debounce; the tab going away
+// flushes immediately so at most a moment's work can ever be lost.
+function scheduleRecentSave() {
+  if (!recentEnabled || !currentRecentId) return;
+  if (recentSaveTimer) clearTimeout(recentSaveTimer);
+  recentSaveTimer = setTimeout(flushRecentSave, 1500);
+}
+function flushRecentSave() {
+  if (recentSaveTimer) { clearTimeout(recentSaveTimer); recentSaveTimer = null; }
+  if (!currentRecentId) return;
+  const id = currentRecentId;
+  try { recentUpdateAnnots(id, annotsForSave()).catch(() => {}); } catch (_) {}
+}
+
+async function recentPut(rec) {
+  const db = await dbOpen();
+  await dbRun(db, "readwrite", (st) => { st.put(rec); });
+  const extra = (await recentList()).slice(RECENT_KEEP);
+  if (extra.length) await dbRun(db, "readwrite", (st) => { extra.forEach((r) => st.delete(r.id)); });
+}
+
+function saveRecent() {
+  try {
+    if (!recentEnabled) return;                                      // nothing is kept unless the user opted in
+    if (!baseSeg0 || segments.length !== 1 || captureTime) return;   // single-image captures only; never re-save a restored one
+    const src = baseSeg0;
+    const tw = 220, th = Math.min(400, Math.max(1, Math.round(src.height * tw / src.width)));
+    const tc = document.createElement("canvas"); tc.width = tw; tc.height = th;
+    tc.getContext("2d").drawImage(src, 0, 0, src.width, src.width * th / tw, 0, 0, tw, th);
+    const thumb = tc.toDataURL("image/jpeg", 0.7);
+    const m = meta || {};
+    const id = Date.now();
+    currentRecentId = id;                       // later annotation edits update THIS row
+    src.toBlob((blob) => {
+      if (!blob) return;
+      recentPut({ id, ts: id, title: m.title || "", url: m.url || "", dpr, w: src.width, h: src.height, env: m.env || null, thumb, blob, annots: [] }).catch(() => {});
+    }, "image/jpeg", 0.85);
+  } catch (_) {}
+}
+
+function timeAgo(ts) {
+  const s = Math.max(0, (Date.now() - ts) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.round(s / 60) + " min ago";
+  if (s < 86400) return Math.round(s / 3600) + " h ago";
+  return new Date(ts).toLocaleString();
+}
+
+async function openRecent() {
+  const d = el("recentDrawer"), list = el("recentList");
+  let items = [];
+  if (recentEnabled) { try { items = await recentList(); } catch (_) {} }
+  list.innerHTML = "";
+  const count = el("recentCount");
+  if (count) count.textContent = recentEnabled && items.length ? items.length + " of 3 kept" : "";
+  if (!recentEnabled) {
+    const e = document.createElement("div"); e.className = "recent-empty";
+    e.textContent = "Keeping recent captures is turned off. Switch on \u201cKeep recent captures\u201d in Settings and your next 3 captures will be kept here.";
+    list.appendChild(e);
+  } else if (!items.length) {
+    const e = document.createElement("div"); e.className = "recent-empty";
+    e.textContent = "No saved captures yet. Your last 3 captures are kept here automatically, so closing this tab by mistake is not a lost capture.";
+    list.appendChild(e);
+  }
+  for (const r of items) {
+    const it = document.createElement("div"); it.className = "recent-item";
+    it.title = "Reopen this capture";
+    it.tabIndex = 0;                       // reachable with Tab, activate with Enter/Space
+    const img = document.createElement("img"); img.src = r.thumb; img.alt = "";
+    const tx = document.createElement("div"); tx.className = "recent-txt";
+    const t = document.createElement("b"); t.textContent = r.title || r.url || "(untitled)";
+    const n = (r.annots || []).length;
+    const s = document.createElement("span");
+    s.textContent = timeAgo(r.ts) + "  \u00b7  " + r.w + "\u00d7" + r.h + " px" + (n ? "  \u00b7  " + n + " annotation" + (n > 1 ? "s" : "") : "");
+    tx.appendChild(t); tx.appendChild(s);
+    const open = document.createElement("span"); open.className = "recent-open"; open.textContent = "Reopen";
+    const del = document.createElement("button"); del.className = "recent-del"; del.title = "Remove from Recent"; del.textContent = "\u00d7";
+    del.addEventListener("click", async (ev) => { ev.stopPropagation(); try { await recentDelete(r.id); } catch (_) {} openRecent(); });
+    it.appendChild(img); it.appendChild(tx); it.appendChild(open); it.appendChild(del);
+    it.addEventListener("click", () => restoreRecent(r.id));
+    it.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); restoreRecent(r.id); }
+    });
+    list.appendChild(it);
+  }
+  d.hidden = false;
+  el("recentBtn").classList.add("on");
+  const first = list.querySelector(".recent-item");
+  if (first) first.focus();
+}
+function closeRecent() { const d = el("recentDrawer"); if (d) d.hidden = true; el("recentBtn").classList.remove("on"); }
+function toggleRecent() { el("recentDrawer").hidden ? openRecent() : closeRecent(); }
+
+async function restoreRecent(id) {
+  if (jobId && !captureSettled) { toast("Wait for the current capture to finish, then reopen a recent one"); return; }
+  let rec = null;
+  try { rec = await recentGet(id); } catch (_) {}
+  if (!rec) { toast("That capture is no longer available"); return; }
+  if (annotations.length && !confirm("Replace the current image? Annotations on it will be lost.")) return;
+  let bmp;
+  try { bmp = await createImageBitmap(rec.blob); } catch (_) { toast("Couldn't load that capture"); return; }
+
+  // Reset the editor to a fresh single-image state.
+  if (annotating) exitAnnot();
+  try { endCrop(); } catch (_) {}
+  for (const s of segments) s.canvas.remove();
+  if (annotCanvas) { annotCanvas.remove(); annotCanvas = null; annotCtx = null; }
+  annotations = []; undoStack = []; redoStack = []; liveAnnot = null; drag = null; clearActiveAnnot();
+
+  const canvas = document.createElement("canvas");
+  canvas.width = bmp.width; canvas.height = bmp.height;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(bmp, 0, 0);
+  if (bmp.close) bmp.close();
+  canvasHost.insertBefore(canvas, cropOverlay);
+  segments = [{ canvas, ctx, startY: 0, height: canvas.height }];
+  fullWpx = canvas.width; fullHpx = canvas.height; truncated = false;
+  meta = { mode: "visible", title: rec.title, url: rec.url, dpr: rec.dpr || 1, env: rec.env || undefined };
+  dpr = rec.dpr || 1;
+  captureTime = new Date(rec.ts);
+  baseSeg0 = canvas; stampLocked = false; infoBarLink = null; aborted = false;
+  lastDriveLink = null;
+  { const cl = el("copyLink"); if (cl) { cl.hidden = true; const s = cl.querySelector("span"); if (s) s.textContent = "Copy link"; } }
+
+  progressWrap.hidden = true; errorWrap.hidden = true; stage.hidden = false; tools.hidden = false;
+  applyInfoBar();
+  el("crop").disabled = false; el("crop").style.opacity = "";
+  el("annotate").disabled = false; el("annotate").style.opacity = "";
+  // Bring the saved markup back as real, editable annotations (stored bar-less, so
+  // shift them down if the info bar is showing now).
+  currentRecentId = rec.id;                   // further edits keep updating this row
+  if (rec.annots && rec.annots.length) {
+    annotations = cloneAnnots(rec.annots);
+    if (infoBar) shiftAnnotList(annotations, infoBarHeight());
+    setupAnnotationLayer();
+    renderAnnots();
+  }
+  reflectInfoBarBtn(); updateDims(); applyZoom();
+  closeRecent();
+  const n = (rec.annots || []).length;
+  toast("Reopened: " + (rec.title || "capture") + (n ? "  (" + n + " annotation" + (n > 1 ? "s" : "") + ")" : ""));
 }
 
 /* ------------------------- Google Drive upload ------------------------- */
@@ -1413,6 +2036,7 @@ async function uploadToDrive() {
 /* ------------------------- UI bits ------------------------- */
 function showError(message) {
   aborted = true; // stop any further tile drawing / finalize from racing over the error
+  settleCapture();
   progressWrap.hidden = true;
   stage.hidden = true;
   tools.hidden = true;

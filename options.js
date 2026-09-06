@@ -7,6 +7,7 @@ const DEFAULTS = {
   smoothScroll: true,
   infoBar: true,
   envBar: true,
+  recentEnabled: false,          // opt-in: nothing is kept on disk until the user asks for it
   filenameTemplate: "{title}-{date}",
   driveClientId: "",
   driveFolderId: "",
@@ -22,6 +23,7 @@ const els = {
   smoothScroll: document.getElementById("smoothScroll"),
   infoBar: document.getElementById("infoBar"),
   envBar: document.getElementById("envBar"),
+  recentEnabled: document.getElementById("recentEnabled"),
   filenameTemplate: document.getElementById("filenameTemplate"),
   driveClientId: document.getElementById("driveClientId"),
   driveFolderId: document.getElementById("driveFolderId"),
@@ -62,6 +64,7 @@ async function load() {
   els.smoothScroll.checked = cfg.smoothScroll;
   els.infoBar.checked = cfg.infoBar;
   els.envBar.checked = cfg.envBar;
+  els.recentEnabled.checked = !!cfg.recentEnabled;
   els.filenameTemplate.value = cfg.filenameTemplate;
   els.driveClientId.value = cfg.driveClientId || "";
   els.driveFolderId.value = cfg.driveFolderId || "";
@@ -83,11 +86,16 @@ async function save() {
     smoothScroll: els.smoothScroll.checked,
     infoBar: els.infoBar.checked,
     envBar: els.envBar.checked,
+    recentEnabled: els.recentEnabled.checked,
     filenameTemplate: els.filenameTemplate.value.trim() || DEFAULTS.filenameTemplate,
     driveClientId: els.driveClientId.value.trim(),
     driveFolderId: els.driveFolderId.value.trim(),
     driveShareAnyone: els.driveShareAnyone.checked
   };
+  // Turning the feature off should not leave captures sitting in storage.
+  if (!settings.recentEnabled) {
+    try { indexedDB.deleteDatabase("fpc-captures"); } catch (_) {}
+  }
   await chrome.storage.sync.set({ settings });
   els.status.classList.add("show");
   setTimeout(() => els.status.classList.remove("show"), 1400);

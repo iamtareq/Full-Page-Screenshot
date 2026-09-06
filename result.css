@@ -262,3 +262,38 @@ input[type="range"] { accent-color: var(--accent); }
   #printArea { display: block !important; }
   #printArea img { width: 100%; display: block; page-break-after: always; }
 }
+
+/* ---- Recent captures ---- */
+.recentbtn { margin-left: auto; }
+.recentbtn.on { background: var(--panel-2); color: var(--text); }
+/* Anchored under the Recent button, with a caret so it reads as belonging to it. */
+.recent { position: fixed; right: 16px; top: 54px; z-index: 60; width: 358px; max-height: 70vh; overflow: auto;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 18px 44px rgba(16, 24, 40, .18), 0 2px 8px rgba(16, 24, 40, .10); padding: 10px;
+  animation: recentIn .13s ease-out; transform-origin: top right; }
+@keyframes recentIn { from { opacity: 0; transform: translateY(-6px) scale(.97); } to { opacity: 1; transform: none; } }
+.recent::before {                      /* caret pointing at the Recent button */
+  content: ""; position: absolute; top: -7px; right: 26px; width: 12px; height: 12px;
+  background: var(--panel); border-left: 1px solid var(--border); border-top: 1px solid var(--border);
+  transform: rotate(45deg); border-radius: 2px 0 0 0; }
+.recent-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 4px 6px 8px; }
+.recent h4 { margin: 0; font-size: 13px; font-weight: 800; }
+.recent-count { font-size: 11px; color: var(--muted); font-weight: 600; }
+.recent-item { display: flex; gap: 10px; align-items: center; padding: 8px; border-radius: 10px; cursor: pointer;
+  border: 1px solid transparent; transition: background .12s, border-color .12s; }
+.recent-item:hover, .recent-item:focus-visible { background: var(--panel-2);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); outline: none; }
+.recent-open { flex: 0 0 auto; font-size: 11px; font-weight: 800; color: var(--accent);
+  opacity: 0; transition: opacity .12s; white-space: nowrap; }
+.recent-item:hover .recent-open, .recent-item:focus-visible .recent-open { opacity: 1; }
+.recent-item img { width: 76px; height: 56px; object-fit: cover; object-position: top; border-radius: 6px;
+  border: 1px solid var(--border); background: #fff; flex: 0 0 auto; }
+.recent-txt { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.recent-txt b { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.recent-txt span { font-size: 11px; color: var(--muted); }
+/* The remove button stays out of the way until you are actually on the row. */
+.recent-del { border: 0; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer;
+  padding: 2px 7px; border-radius: 6px; flex: 0 0 auto; opacity: 0; transition: opacity .12s, background .12s, color .12s; }
+.recent-item:hover .recent-del, .recent-item:focus-visible .recent-del, .recent-del:focus-visible { opacity: 1; }
+.recent-del:hover { background: rgba(225,29,72,.12); color: #e11d48; }
+.recent-empty { font-size: 12.5px; color: var(--muted); padding: 10px; line-height: 1.5; }
