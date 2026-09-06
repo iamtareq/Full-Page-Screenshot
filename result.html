@@ -14,17 +14,23 @@
 
     <div class="tools" id="tools" hidden>
       <div class="group">
-        <button class="tbtn primary" id="download" title="Download (Ctrl+S)">
-          <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16" /></svg>
-          <span id="downloadLabel">Download PNG</span>
-        </button>
-        <button class="tbtn split" id="formatMenuBtn" title="Choose format">
-          <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
-        </button>
-        <div class="menu" id="formatMenu" hidden>
-          <button data-fmt="png">PNG image</button>
-          <button data-fmt="jpg">JPG image</button>
-          <button data-fmt="pdf">PDF document</button>
+        <div class="dl">
+          <div class="dl-shell">
+            <button type="button" class="dl-main" id="download" title="Download (Ctrl+S)">
+              <svg class="dl-ico" viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
+              <span id="downloadLabel">Download PNG</span>
+            </button>
+            <button type="button" class="dl-caret" id="formatMenuBtn" title="Choose format" aria-haspopup="menu">
+              <svg class="dl-chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+              <span class="dl-sr">Choose format</span>
+            </button>
+          </div>
+          <div class="dl-menu" id="formatMenu" hidden>
+            <div class="dl-menu-head">Save as</div>
+            <button type="button" data-fmt="png"><span class="dl-name">PNG</span><span class="dl-note">Lossless image</span><svg class="dl-tick" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg></button>
+            <button type="button" data-fmt="jpg"><span class="dl-name">JPG</span><span class="dl-note">Smaller file</span><svg class="dl-tick" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg></button>
+            <button type="button" data-fmt="pdf"><span class="dl-name">PDF</span><span class="dl-note">Document</span><svg class="dl-tick" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg></button>
+          </div>
         </div>
       </div>
 
