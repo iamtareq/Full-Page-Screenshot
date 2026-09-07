@@ -1,4 +1,4 @@
 {
-  "version": "1.1.5",
-  "notes": "New icon: the toolbar button is now a camera, so it actually looks like a screenshot tool."
+  "version": "1.1.6",
+  "notes": "New capture mode: point at a table that scrolls on its own and get the whole grid - column headings, every row, and the pager - in one image."
 }

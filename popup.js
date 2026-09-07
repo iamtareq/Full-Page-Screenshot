@@ -21,6 +21,87 @@ document.getElementById("full").addEventListener("click", () => start("full"));
 document.getElementById("visible").addEventListener("click", () => start("visible"));
 document.getElementById("region").addEventListener("click", () => start("region"));
 document.getElementById("element").addEventListener("click", () => start("element"));
+document.getElementById("scroller").addEventListener("click", () => start("scroller"));
+
+/* ---- "More ways to capture" ------------------------------------------------
+ * Collapsed on a fresh profile, and the choice sticks. It lives in storage.local,
+ * NOT in the settings object: options.js rebuilds that object from its form fields
+ * on every save, so a UI preference parked there would be wiped the first time
+ * someone touched Settings. */
+const moreBtn = document.getElementById("moreBtn");
+const moreWrap = document.getElementById("moreWrap");
+const moreInner = moreWrap.firstElementChild;
+let moreDone = null, moreTimer = 0;
+function setMore(open, animate) {
+  moreBtn.setAttribute("aria-expanded", open ? "true" : "false");
+  if (moreDone) { moreWrap.removeEventListener("transitionend", moreDone); moreDone = null; }
+  clearTimeout(moreTimer);
+  moreWrap.classList.remove("settled");            // clip while it moves
+  if (!animate) {
+    moreWrap.style.transition = "none";
+    moreWrap.style.height = open ? "auto" : "0px";
+    if (open) moreWrap.classList.add("settled");
+    requestAnimationFrame(() => requestAnimationFrame(() => { moreWrap.style.transition = ""; }));
+    return;
+  }
+  // Both directions start from a definite pixel height, or there is nothing to animate.
+  moreWrap.style.height = moreInner.offsetHeight + "px";
+  if (open) {
+    // Settle on transitionend, but never DEPEND on it: with prefers-reduced-motion the
+    // transition is removed entirely and the event never fires, which would leave the
+    // panel pinned to a stale pixel height. The timer is the guarantee.
+    const settle = () => {
+      if (!moreDone) return;
+      clearTimeout(moreTimer);
+      moreWrap.removeEventListener("transitionend", moreDone); moreDone = null;
+      moreWrap.style.height = "auto";              // respect later layout changes
+      moreWrap.classList.add("settled");
+    };
+    moreDone = (e) => { if (e.propertyName === "height") settle(); };
+    moreWrap.addEventListener("transitionend", moreDone);
+    moreTimer = setTimeout(settle, 260);
+  } else {
+    void moreWrap.offsetHeight;                    // flush the definite height first
+    moreWrap.style.height = "0px";
+  }
+}
+try {
+  chrome.storage.local.get("moreOpen", (v) => setMore(!!(v && v.moreOpen), false));
+} catch (_) { setMore(false, false); }
+moreBtn.addEventListener("click", () => {
+  const open = moreBtn.getAttribute("aria-expanded") !== "true";
+  setMore(open, true);
+  try { chrome.storage.local.set({ moreOpen: open }); } catch (_) {}
+});
+
+/* ---- Keyboard shortcuts -----------------------------------------------------
+ * Chrome only applies a manifest `suggested_key` the first time a command is
+ * registered, and it silently leaves a key unbound when another extension already
+ * owns it. So never print the manifest's wishlist - ask Chrome what is actually
+ * bound and show only that. Nothing bound → no chip, instead of a label that lies. */
+const KBD = { "capture-full-page": "kbd-full", "capture-visible": "kbd-visible",
+              "capture-area": "kbd-region", "capture-element": "kbd-element",
+              "capture-scroller": "kbd-scroller" };
+try {
+  chrome.commands.getAll((cmds) => {
+    let bound = 0;
+    (cmds || []).forEach((c) => {
+      const el = document.getElementById(KBD[c.name] || "");
+      if (!el) return;
+      if (c.shortcut) { el.textContent = c.shortcut; el.hidden = false; bound++; }
+    });
+    const link = document.getElementById("shortcuts");
+    // Only worth offering when something is missing.
+    if (link) link.hidden = bound === Object.keys(KBD).length;
+  });
+} catch (_) {}
+
+const _sc = document.getElementById("shortcuts");
+if (_sc) _sc.addEventListener("click", (e) => {
+  e.preventDefault();
+  chrome.tabs.create({ url: "chrome://extensions/shortcuts" });
+  window.close();
+});
 document.getElementById("options").addEventListener("click", (e) => {
   e.preventDefault();
   chrome.runtime.openOptionsPage();

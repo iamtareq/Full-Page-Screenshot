@@ -118,11 +118,16 @@ function fpcPrepare(opts) {
   de.style.scrollBehavior = "auto";
 
   if (opts && opts.hideFixed && body) {
+    // The "scrolling table" mode leaves the grid it is about to capture here. Never
+    // hide a fixed/sticky shell that WRAPS it - visibility is inherited, so that would
+    // blank the very thing being captured.
+    const keep = window.__fpcGridRoot || null;
     const nodes = body.getElementsByTagName("*");
     const candidates = [body];
     for (let i = 0; i < nodes.length; i++) candidates.push(nodes[i]);
     for (const el of candidates) {
       if (!el || el.nodeType !== 1) continue;
+      if (keep && el.contains(keep)) continue;
       let pos;
       try { pos = getComputedStyle(el).position; } catch (_) { continue; }
       if (pos === "fixed" || pos === "sticky") state.fixed.push(el);
@@ -194,6 +199,19 @@ function fpcHideFixed() {
 }
 
 function fpcRestore() {
+  // Undo a "scrolling table" expansion first - it is set up before __fpc exists, so it
+  // has to be restored even if the capture never got as far as measuring the page.
+  const ex = window.__fpcExpanded;
+  if (ex) {
+    for (const [n, maxH, h, oy, ox] of ex) {
+      try {
+        n.style.maxHeight = maxH || ""; n.style.height = h || "";
+        n.style.overflowY = oy || "";   n.style.overflowX = ox || "";
+      } catch (_) {}
+    }
+    delete window.__fpcExpanded;
+  }
+  try { delete window.__fpcGridRoot; } catch (_) { window.__fpcGridRoot = null; }
   const st = window.__fpc;
   if (!st) return;
   if (st.saved) {
@@ -585,6 +603,171 @@ function fpcSelectElement() {
   });
 }
 
+/* Pick a scrolling box by hand. Same overlay grammar as the element picker, but it
+ * snaps to the nearest SCROLLABLE ancestor of whatever is under the cursor and shows
+ * how much is hidden inside it. The chosen element is left on window.__fpcPicked for
+ * fpcPrepareContainer to pick up - the two run in the same isolated world. */
+function fpcSelectScroller() {
+  return new Promise((resolve) => {
+    if (window.__fpcScrCleanup) { try { window.__fpcScrCleanup(); } catch (_) {} }
+    const de = document.documentElement;
+    const box = document.createElement("div");
+    box.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;display:none;border:2px solid #14b8a6;background:rgba(20,184,166,.14);box-shadow:0 0 0 2px rgba(255,255,255,.5),0 0 0 9999px rgba(15,23,42,.3);";
+    const tag = document.createElement("div");
+    tag.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;display:none;background:#0f766e;color:#fff;font:600 12px/1 system-ui,Segoe UI,Arial;padding:4px 7px;border-radius:5px;white-space:nowrap;";
+    const hint = document.createElement("div");
+    hint.textContent = "Hover a scrolling table or panel · click to capture all of it · Esc to cancel";
+    hint.style.cssText = "position:fixed;z-index:2147483647;pointer-events:none;top:14px;left:50%;transform:translateX(-50%);background:rgba(17,24,39,.94);color:#fff;font:600 13px/1 system-ui,Segoe UI,Arial;padding:9px 15px;border-radius:9px;";
+    de.appendChild(box); de.appendChild(tag); de.appendChild(hint);
+    const prevCursor = de.style.cursor;
+    de.style.cursor = "crosshair";
+    let current = null, done = false;
+
+    // nearest ancestor that actually scrolls (either axis)
+    function scrollerFor(node) {
+      for (let n = node; n && n !== de; n = n.parentElement) {
+        const dy = n.scrollHeight - n.clientHeight, dx = n.scrollWidth - n.clientWidth;
+        if (dy < 40 && dx < 40) continue;
+        let cs; try { cs = getComputedStyle(n); } catch (_) { continue; }
+        const okY = dy >= 40 && /^(auto|scroll|overlay)$/.test(cs.overflowY);
+        const okX = dx >= 40 && /^(auto|scroll|overlay)$/.test(cs.overflowX);
+        if (okY || okX) return n;
+      }
+      return null;
+    }
+    function highlight(node) {
+      const el = node ? scrollerFor(node) : null;
+      current = el;
+      if (!el) {
+        box.style.display = "none";
+        tag.style.display = "block";
+        tag.textContent = "no scrolling area here";
+        const p = lastPt;
+        tag.style.left = (p.x + 12) + "px"; tag.style.top = (p.y + 14) + "px";
+        return;
+      }
+      const r = el.getBoundingClientRect();
+      box.style.display = "block";
+      box.style.left = r.left + "px"; box.style.top = r.top + "px";
+      box.style.width = r.width + "px"; box.style.height = r.height + "px";
+      let name = el.tagName.toLowerCase();
+      if (el.id) name += "#" + el.id;
+      else if (el.classList && el.classList.length) name += "." + el.classList[0];
+      const dy = el.scrollHeight - el.clientHeight, dx = el.scrollWidth - el.clientWidth;
+      const parts = [];
+      if (dy >= 40) parts.push(dy + "px below");
+      if (dx >= 40) parts.push(dx + "px right");
+      tag.style.display = "block";
+      tag.textContent = name + "   " + parts.join(" + ") + " hidden";
+      let tt = r.top - 24; if (tt < 4) tt = r.top + 4;
+      tag.style.left = Math.max(4, r.left) + "px"; tag.style.top = Math.max(4, tt) + "px";
+    }
+    let lastPt = { x: 0, y: 0 };
+    function cleanup() {
+      box.remove(); tag.remove(); hint.remove();
+      de.style.cursor = prevCursor || "";
+      for (const ev in handlers) document.removeEventListener(ev, handlers[ev], true);
+      window.removeEventListener("keydown", onKey, true);
+      window.__fpcScrCleanup = null;
+    }
+    function finish(res) { if (done) return; done = true; cleanup(); resolve(res); }
+    function onMove(e) { lastPt = { x: e.clientX, y: e.clientY }; highlight(document.elementFromPoint(e.clientX, e.clientY)); }
+    function block(e) { e.preventDefault(); e.stopPropagation(); }
+    function onClick(e) {
+      e.preventDefault(); e.stopPropagation();
+      const el = current || scrollerFor(document.elementFromPoint(e.clientX, e.clientY));
+      if (!el) { finish(null); return; }
+      window.__fpcPicked = el;          // fpcPrepareContainer reads this
+      finish({ ok: true,
+        hiddenY: el.scrollHeight - el.clientHeight,
+        hiddenX: el.scrollWidth - el.clientWidth });
+    }
+    function onKey(e) { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); finish(null); } }
+    const handlers = { mousemove: onMove, mousedown: block, mouseup: block, click: onClick,
+      contextmenu: block, pointerdown: block, pointerup: block, pointermove: block };
+    for (const ev in handlers) document.addEventListener(ev, handlers[ev], true);
+    window.addEventListener("keydown", onKey, true);
+    window.__fpcScrCleanup = () => finish(null);
+  });
+}
+
+/* Unlock the hand-picked scrolling box so its rows join the page flow, then report the
+ * wrapper worth capturing. Grids keep the column header in a SEPARATE element next to
+ * the scroll body (DataTables puts it in .dataTables_scrollHead), so capturing the
+ * scroller alone gives rows with no headings - useless for a bug report. Once the box
+ * is unlocked the whole grid is ordinary page content, and the plain region path
+ * captures header, rows, footer and pager together.
+ * Styles are saved on window.__fpcExpanded; fpcRestore puts them back. */
+function fpcExpandPicked() {
+  const el = window.__fpcPicked || null;
+  try { delete window.__fpcPicked; } catch (_) { window.__fpcPicked = null; }
+  if (!el) return null;
+  const de = document.documentElement;
+
+  // The capture root: climb while the ancestor is the same width as the scroller, so we
+  // pick up the header/footer/pager that belong to it but stop before the page shell.
+  let root = el;
+  const w0 = el.getBoundingClientRect().width;
+  for (let n = el.parentElement; n && n !== document.body && n !== de; n = n.parentElement) {
+    const w = n.getBoundingClientRect().width;
+    if (Math.abs(w - w0) > 8) break;
+    root = n;
+  }
+
+  // Three kinds of clamp have to come off together:
+  //   1. the picked box itself,
+  //   2. every other scrolling pane inside the root - frozen-column grids keep one per
+  //      pane and they must grow together or the frozen column is cut short,
+  //   3. the plain wrappers in between, which carry an explicit pixel height (the
+  //      FixedColumns plugin puts height:595px on DTFC_ScrollWrapper). Those do not
+  //      scroll, so a scroller-only sweep misses them and the whole grid stays clamped
+  //      to one screen even though its rows have already expanded.
+  const saved = [];
+  const seen = new Set();
+  const unlock = (n, alsoOverflow) => {
+    if (seen.has(n)) return;
+    seen.add(n);
+    saved.push([n, n.style.maxHeight, n.style.height, n.style.overflowY, n.style.overflowX]);
+    n.style.maxHeight = "none";
+    n.style.height = "auto";
+    if (alsoOverflow) {
+      n.style.overflowY = "visible";
+      if (n.scrollWidth - n.clientWidth < 8) n.style.overflowX = "visible";
+    }
+  };
+  unlock(el, true);
+  root.querySelectorAll("*").forEach((n) => {
+    if (n.scrollHeight - n.clientHeight < 40) return;
+    let cs; try { cs = getComputedStyle(n); } catch (_) { return; }
+    if (/^(auto|scroll|overlay)$/.test(cs.overflowY)) unlock(n, true);
+  });
+  for (let n = el; n; n = n.parentElement) {   // 3 - the height-clamped shells
+    unlock(n, false);
+    if (n === root) break;
+  }
+  window.__fpcExpanded = saved;
+  window.__fpcGridRoot = root;      // fpcPrepare must not hide anything wrapping this
+
+  return new Promise((resolve) => {
+    // two frames: one for the style write, one for the grid to relayout
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const r = root.getBoundingClientRect();
+      const docW = Math.max(de.scrollWidth, document.body.scrollWidth, de.clientWidth);
+      const docH = Math.max(de.scrollHeight, document.body.scrollHeight, de.clientHeight);
+      const x = Math.max(0, r.left + window.scrollX);
+      const y = Math.max(0, r.top + window.scrollY);
+      resolve({
+        x, y,
+        w: Math.max(1, Math.min(r.width, docW - x)),
+        h: Math.max(1, Math.min(r.height, docH - y)),
+        dpr: window.devicePixelRatio || 1,
+        rootTag: root.tagName.toLowerCase() + (root.id ? "#" + root.id : ""),
+        unlocked: saved.length
+      });
+    }));
+  });
+}
+
 /* ------------------------------- Step planning ------------------------------- */
 // Scroll positions whose viewports cover the span [start, start+size] along one axis.
 function tilePositions(start, size, view, full) {
@@ -622,6 +805,13 @@ async function tiledCapture(o) {
 
   const tiles = [];
   let count = 0, rowIndex = 0;
+  // When the capture does not start at the top of the page, a sticky/fixed header is
+  // NOT part of what was asked for - it is just painted over it. Hide it from the very
+  // first tile, or it covers the top of the grid (the exact spot the column headings
+  // live). The full-page path keeps its default: header visible in row 0, hidden after.
+  if (o.hideFixedFromStart && settings.hideFixed) {
+    try { await exec(fpcHideFixed); } catch (_) {}
+  }
   for (const y of ys) {
     for (const x of xs) {
       const smooth = !o.forceInstant && settings.smoothScroll && multi;
@@ -743,6 +933,27 @@ async function runCapture(tab, mode, delay) {
       return await tiledCapture({ exec, windowId, tab, jobId, settings, metrics, region, mode: "region" });
     }
 
+    // ---- scrolling area (hand-picked container) ----
+    // Same machinery as the automatic inner-container path, except the user points at
+    // the box. That makes it work where auto-detection bows out: grids whose page also
+    // scrolls a little, or that sit just under the dominance threshold.
+    if (mode === "scroller") {
+      const pick = await exec(fpcSelectScroller);   // stashes the element on window.__fpcPicked
+      if (!pick) { setBadge(""); return; }
+      const [act2] = await chrome.tabs.query({ active: true, windowId });
+      if (!act2 || act2.id !== tab.id) { setBadge(""); return; }
+      // Unlock the box so the grid - header, rows, footer and pager together - becomes
+      // ordinary page content, then capture it with the plain region path. Capturing the
+      // scroller by itself would hand back rows with no column headings.
+      const grid = await exec(fpcExpandPicked);
+      if (!grid) throw new Error("Could not open that scrolling area. Reload the page and try again.");
+      const metrics = await exec(fpcPrepare, [{ hideFixed: settings.hideFixed }]);
+      if (!metrics) { await exec(fpcRestore); throw new Error("Could not read the page. Reload the page and try again."); }
+      const region = clampRegion(grid, metrics);
+      return await tiledCapture({ exec, windowId, tab, jobId, settings, metrics, region,
+        mode: "region", hideFixedFromStart: true });
+    }
+
     // ---- full page ----
     if (settings.preScroll) {
       try { await exec(fpcPreScroll); } catch (_) {}
@@ -820,6 +1031,7 @@ chrome.commands.onCommand.addListener(async (command) => {
   else if (command === "capture-visible") runCapture(tab, "visible");
   else if (command === "capture-area") runCapture(tab, "region");
   else if (command === "capture-element") runCapture(tab, "element");
+  else if (command === "capture-scroller") runCapture(tab, "scroller");
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {

@@ -107,8 +107,50 @@
     }
     .update .ubtn:hover { filter: brightness(1.08); }
     .update .ubtn:disabled { opacity: .55; cursor: default; }
-    @media (prefers-color-scheme: dark) { .update .ubtn { color: #06201c; } }
+    /* RULE: a teal FILL takes dark ink in dark mode. The accent lightens to #2dd4bf
+       there, and white on it is 1.86:1 - #06201c is 9.16:1. Anything that gains a
+       var(--accent) background needs a line here too. */
+    @media (prefers-color-scheme: dark) {
+      .update .ubtn { color: #06201c; }
+      .btn.primary .chip { color: #06201c; }
+      .seg button.active { color: #06201c; }
+    }
 
+
+    /* "More ways to capture": a quiet disclosure, deliberately lighter than a capture
+       row so it reads as a hint that there is more - not as a fourth equal choice. */
+    .more {
+      display: flex; align-items: center; gap: 8px; width: 100%;
+      padding: 8px 10px; border: 0; border-radius: 9px; background: transparent;
+      color: var(--faint); font-weight: 500; font-size: 11.5px; line-height: 1; text-align: left; cursor: pointer;
+      transition: background .13s ease, color .13s ease;
+    }
+    .more:hover { background: var(--surface-2); color: var(--muted); }
+    .more:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .more-chev {
+      width: 13px; height: 13px; flex: 0 0 auto; fill: none; stroke: currentColor;
+      stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round;
+      transition: transform .18s ease;
+    }
+    .more[aria-expanded="true"] .more-chev { transform: rotate(90deg); }
+    .more[aria-expanded="true"] { color: var(--muted); }
+    .more-n {
+      margin-left: auto; flex: 0 0 auto; font: 600 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: var(--faint); background: var(--surface-2); border: 1px solid var(--border);
+      padding: 3px 6px; border-radius: 999px;
+    }
+    .more[aria-expanded="true"] .more-n { opacity: 0; }
+    /* Animate a measured height. The tidy 0fr->1fr grid trick is one-way here: with
+       min-height:0 the 1fr track resolves to 0 in an auto-height container, so once it
+       has collapsed it never reopens. JS sets the pixel height and releases it to auto
+       when the transition ends. */
+    .more-wrap { height: 0; overflow: hidden; transition: height .2s ease; }
+    .more-inner { display: flex; flex-direction: column; gap: 6px; }
+    /* only once it has settled, so a focus ring is not clipped by the animating box */
+    .more-wrap.settled { overflow: visible; }
+    @media (prefers-reduced-motion: reduce) {
+      .more-wrap, .more-chev { transition: none; }
+    }
     /* footer */
     .foot {
       display: flex; align-items: center; justify-content: flex-end; gap: 2px;
@@ -146,23 +188,37 @@
     <button class="btn primary" id="full">
       <span class="chip"><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></span>
       <span class="txt"><b>Full page</b><span>Entire scrollable page</span></span>
-      <span class="kbd">Alt+Shift+P</span>
+      <span class="kbd" id="kbd-full" hidden></span>
     </button>
     <button class="btn" id="visible">
       <span class="chip"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3"/></svg></span>
       <span class="txt"><b>Visible area</b><span>Just what you see now</span></span>
-      <span class="kbd">Alt+Shift+V</span>
+      <span class="kbd" id="kbd-visible" hidden></span>
     </button>
     <button class="btn" id="region">
       <span class="chip"><svg viewBox="0 0 24 24"><path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/><rect x="8" y="8" width="8" height="8" rx="1" stroke-dasharray="2 2"/></svg></span>
       <span class="txt"><b>Capture area</b><span>Drag to select &middot; scrolls</span></span>
-      <span class="kbd">Alt+Shift+A</span>
+      <span class="kbd" id="kbd-region" hidden></span>
     </button>
-    <button class="btn" id="element">
+    <button class="more" id="moreBtn" type="button" aria-expanded="false" aria-controls="moreWrap">
+      <svg class="more-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+      <span>More ways to capture</span>
+      <span class="more-n">2</span>
+    </button>
+    <div class="more-wrap" id="moreWrap">
+      <div class="more-inner">
+        <button class="btn" id="element">
       <span class="chip"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg></span>
       <span class="txt"><b>Capture element</b><span>Hover &amp; click a component</span></span>
-      <span class="kbd">Alt+Shift+E</span>
-    </button>
+      <span class="kbd" id="kbd-element" hidden></span>
+        </button>
+        <button class="btn" id="scroller">
+      <span class="chip"><svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="13" height="16" rx="2"/><path d="M6 8.5h6M6 12h6M6 15.5h4"/><path d="M20 7v9m0 0l-2.4-2.4M20 16l2.4-2.4"/></svg></span>
+      <span class="txt"><b>Scrolling table</b><span>Whole grid, headings included</span></span>
+      <span class="kbd" id="kbd-scroller" hidden></span>
+        </button>
+      </div>
+    </div>
 
     <div class="timer">
       <span class="tlabel"><svg class="ticon" viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9 2h6"/></svg>Delay before full/visible</span>
@@ -176,6 +232,7 @@
 
   <div class="foot">
     <a id="recentLink" title="Reopen one of your last 3 captures"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Recent</a>
+    <a id="shortcuts" title="Set or repair the keyboard shortcuts"><svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"/></svg>Shortcuts</a>
     <a id="options"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H1a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 2.6 7a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H7a1.6 1.6 0 0 0 1-1.5V1a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V7a1.6 1.6 0 0 0 1.5 1H23a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg>Settings</a>
   </div>
   <script src="popup.js"></script>
