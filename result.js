@@ -365,7 +365,7 @@ function drawInfoBar(ctx, w, barH) {
     maxUrlW = w - pad * 2;
   }
   if (timeStr) {
-    ctx.fillStyle = "#93c5fd";
+    ctx.fillStyle = "#94a3b8";   // leftover indigo-era blue; now matches the env line
     ctx.fillText(timeStr, w - pad - timeW, y1);
   }
   const urlText = fitText(ctx, meta.url || "", maxUrlW);

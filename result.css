@@ -35,7 +35,7 @@
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3);
     --shadow-md: 0 6px 18px rgba(0, 0, 0, .38);
     --shadow-lg: 0 22px 55px rgba(0, 0, 0, .55);
-    --ring: rgba(129, 140, 248, .45);
+    --ring: rgba(45, 212, 191, .40);
   }
 }
 :root[data-theme="dark"] { color-scheme: dark; }
@@ -123,7 +123,7 @@ body {
 .dl-main, .dl-caret {
   display: inline-flex; align-items: center; gap: 8px; margin: 0;
   border: 0; background: transparent; color: #fff; cursor: pointer;
-  font: 650 13px/1 inherit; white-space: nowrap;
+  font-weight: 650; font-size: 13px; line-height: 1; white-space: nowrap;
   transition: background .13s ease;
 }
 .dl-main  { padding: 10px 15px; border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
@@ -154,13 +154,13 @@ body {
 }
 @keyframes pop { from { opacity: 0; transform: translateY(-4px) scale(.98); } to { opacity: 1; transform: none; } }
 .dl-menu-head {
-  padding: 8px 10px 6px; font: 700 10px/1 inherit; letter-spacing: .08em;
+  padding: 8px 10px 6px; font-weight: 700; font-size: 10px; line-height: 1; letter-spacing: .08em;
   text-transform: uppercase; color: var(--muted);
 }
 .dl-menu > button {
   display: flex; align-items: center; gap: 10px; width: 100%; margin: 0; padding: 8px 10px;
   border: 0; border-radius: 7px; background: transparent; color: var(--text);
-  font: 500 13px/1 inherit; text-align: left; cursor: pointer; transition: background .12s ease;
+  font-weight: 500; font-size: 13px; line-height: 1; text-align: left; cursor: pointer; transition: background .12s ease;
 }
 .dl-menu > button:hover { background: var(--panel-2); }
 .dl-menu > button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
