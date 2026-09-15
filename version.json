@@ -1,4 +1,4 @@
 {
-  "version": "1.1.6",
-  "notes": "New capture mode: point at a table that scrolls on its own and get the whole grid - column headings, every row, and the pager - in one image."
+  "version": "1.1.7",
+  "notes": "New White out tool (W): drag to pick an area, press Delete to cover it with a solid block. Nothing changes on the image until you press Delete."
 }
