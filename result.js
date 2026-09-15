@@ -63,6 +63,10 @@ let undoStack = [];
 let redoStack = [];
 const HISTORY_LIMIT = 60;
 let exportingAnnots = false;   // true while flattening: skip on-screen-only selection UI
+// A marquee waiting for Delete. Paint-style: the drag picks the area, Delete erases it.
+// Deliberately NOT an annotation - it carries no ink, exports nothing, and is dropped
+// the moment attention moves elsewhere, so it can never be left behind invisibly.
+let pendingSel = null;
 let liveAnnot = null;
 let activePointerId = null;
 let activeAnnot = null;      // the selected / just-drawn shape (Paint-style live editing)
@@ -574,8 +578,13 @@ function wireTools() {
     // ---- annotation-only keys ----
     if (annotating) {
       // Esc first drops the live shape, then leaves annotate mode.
-      if (e.key === "Escape") { if (activeAnnot) clearActiveAnnot(); else exitAnnot(); return; }
+      if (e.key === "Escape") {
+        if (pendingSel) { clearPendingSel(); renderAnnots(); return; }
+        if (activeAnnot) clearActiveAnnot(); else exitAnnot();
+        return;
+      }
       if (e.key === "Delete" || e.key === "Backspace") {
+        if (commitPendingSel()) { e.preventDefault(); return; }   // Paint: select, then Delete
         if (deleteActiveAnnot()) { e.preventDefault(); return; }
       }
       if (!ctrl && !e.altKey) {
@@ -593,7 +602,7 @@ function wireTools() {
           return;
         }
         // single-letter tool picks, like most drawing apps
-        const TOOLKEYS = { v: "select", r: "rect", o: "ellipse", a: "arrow", l: "line", p: "pen", h: "highlight", t: "text", n: "step", b: "blur", c: "callout" };
+        const TOOLKEYS = { v: "select", r: "rect", o: "ellipse", a: "arrow", l: "line", p: "pen", h: "highlight", t: "text", n: "step", b: "blur", c: "callout", w: "whiteout" };
         const tool = TOOLKEYS[k];
         if (tool) {
           const btn = document.querySelector('.atool[data-tool="' + tool + '"]');
@@ -871,7 +880,7 @@ function wireAnnotation() {
     if (btn.dataset.tool === annotTool) btn.classList.add("active");
     btn.addEventListener("click", () => {
       annotTool = btn.dataset.tool;
-      clearActiveAnnot();
+      clearActiveAnnot(); clearPendingSel();
       applyToolCursor();
       document.querySelectorAll(".atool").forEach((b) => b.classList.remove("active"));
       document.querySelectorAll(".astamp").forEach((b) => b.classList.remove("active"));
@@ -882,7 +891,7 @@ function wireAnnotation() {
   document.querySelectorAll(".astamp").forEach((btn) => {
     btn.addEventListener("click", () => {
       annotTool = "stamp";
-      clearActiveAnnot();
+      clearActiveAnnot(); clearPendingSel();
       stampKind = btn.dataset.stamp;
       // A stamp carries its own meaning-colour (see the "stamp" branch of onAnnotDown,
       // which reads STAMPS[stampKind].color directly), so picking one must NOT touch
@@ -949,6 +958,7 @@ function startAnnot() {
 function exitAnnot() {
   annotating = false;
   liveAnnot = null;
+  pendingSel = null;
   cancelDrag();
   clearActiveAnnot();
   el("annotbar").hidden = true;
@@ -1039,6 +1049,7 @@ function onAnnotDown(e) {
     renderAnnots();
     return;
   }
+  if (pendingSel && annotTool !== "whiteout") { clearPendingSel(); }
   activePointerId = e.pointerId;
   // Capture so we still get the matching up/cancel even if released off-window.
   try { annotCanvas.setPointerCapture(e.pointerId); } catch (_) {}
@@ -1087,6 +1098,14 @@ function onAnnotUp(e) {
   if (a.type === "callout") { renderAnnots(); return startCalloutText(a); }
   const freehand = a.type === "pen" || a.type === "highlight";
   const trivial = freehand ? a.points.length < 2 : (Math.abs(a.x2 - a.x1) < 3 && Math.abs(a.y2 - a.y1) < 3);
+  if (a.type === "whiteout") {
+    // Two steps on purpose: you see what you are about to cover before it happens.
+    pendingSel = trivial ? null : { x1: a.x1, y1: a.y1, x2: a.x2, y2: a.y2 };
+    clearActiveAnnot();
+    reflectHint();
+    renderAnnots();
+    return;
+  }
   if (!trivial) { pushHistory(); annotations.push(a); setActiveAnnot(a); }
   renderAnnots();
 }
@@ -1156,7 +1175,58 @@ function pushHistory() {
   scheduleRecentSave();
 }
 
-function reflectActive() { const h = el("ahint"); if (h) h.hidden = !activeAnnot; }
+// ---- Paint-style area selection -------------------------------------------
+// The White out tool drags a marquee; Delete turns it into a real block. Keeping the
+// marquee OUT of `annotations` means it can never be exported, undone or left behind
+// as an invisible empty shape.
+// The look of "this area is picked, nothing has happened to it yet". Used while the
+// drag is in flight and after it settles, so the two are indistinguishable - which is
+// the point: nothing changes on the image until Delete.
+function drawMarquee(ctx, x, y, w, h) {
+  const s = screenScale();
+  ctx.save();
+  ctx.fillStyle = "rgba(20,184,166,.10)";
+  ctx.fillRect(x, y, w, h);
+  ctx.lineWidth = 1 * s;
+  ctx.setLineDash([]);
+  ctx.strokeStyle = "rgba(15,23,42,.65)";
+  ctx.strokeRect(x + 0.5 * s, y + 0.5 * s, w - s, h - s);
+  ctx.setLineDash([5 * s, 4 * s]);
+  ctx.strokeStyle = "rgba(255,255,255,.95)";
+  ctx.strokeRect(x + 0.5 * s, y + 0.5 * s, w - s, h - s);
+  ctx.restore();
+}
+
+function clearPendingSel() { pendingSel = null; reflectHint(); }
+
+function commitPendingSel() {
+  if (!pendingSel) return false;
+  const s = pendingSel;
+  pendingSel = null;
+  pushHistory();
+  const a = { type: "whiteout", color: annotColor, width: annotWidth * dpr,
+              x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2 };
+  annotations.push(a);
+  setActiveAnnot(a);          // selected, so it can be moved, resized, or Delete'd away
+  renderAnnots();
+  return true;
+}
+
+// The hint line does double duty: it tells you Delete is the next step while an area is
+// picked, and goes back to the move/resize hint once something is selected.
+function reflectHint() {
+  const h = el("ahint");
+  if (!h) return;
+  if (pendingSel) {
+    h.textContent = "Press Delete to white out this area · Esc to cancel";
+    h.hidden = false;
+    return;
+  }
+  h.textContent = "Drag to move · size & colour apply to it";
+  h.hidden = !activeAnnot;
+}
+
+function reflectActive() { reflectHint(); }
 function setActiveAnnot(a) { activeAnnot = a || null; activeTouched = false; reflectActive(); }
 function clearActiveAnnot() {
   const had = !!activeAnnot;
@@ -1262,7 +1332,7 @@ function hitTest(p) {
       continue;
     }
     const b = annotBBox(a);
-    const pad = (a.type === "rect" || a.type === "ellipse" || a.type === "blur") ? half + tol : tol;
+    const pad = (a.type === "rect" || a.type === "ellipse" || a.type === "blur" || a.type === "whiteout") ? half + tol : tol;
     if (p.x >= b.x - pad && p.x <= b.x + b.w + pad && p.y >= b.y - pad && p.y <= b.y + b.h + pad) return a;
     if (a.type === "callout" && a.text && a.x2 != null) {    // ...or on its tail
       const tailW = Math.max(6, (a.size || 20) * 0.32);
@@ -1376,6 +1446,12 @@ function renderAnnots() {
   annotCtx.clearRect(0, 0, annotCanvas.width, annotCanvas.height);
   for (const a of annotations) drawAnnot(a);
   if (liveAnnot && !exportingAnnots) drawAnnot(liveAnnot);   // uncommitted stroke never exports
+  // The pending area: a marquee only, no ink. Two passes - dark then dashed light -
+  // so the edge reads on a white ERP page and on a dark one alike.
+  if (pendingSel && !exportingAnnots) {
+    const px = Math.min(pendingSel.x1, pendingSel.x2), py = Math.min(pendingSel.y1, pendingSel.y2);
+    drawMarquee(annotCtx, px, py, Math.abs(pendingSel.x2 - pendingSel.x1), Math.abs(pendingSel.y2 - pendingSel.y1));
+  }
   // Dashed outline around the selected / live shape. Screen-only: flatten() re-renders
   // with exportingAnnots=true, so this never reaches a download, copy or Drive upload.
   if (activeAnnot && !exportingAnnots && annotations.includes(activeAnnot)) {
@@ -1443,6 +1519,17 @@ function drawAnnot(a) {
     case "blur":
       drawBlur(ctx, x, y, w, h);
       break;
+    case "whiteout": {
+      // While the drag is still in flight this is only a SELECTION - Paint does not
+      // paint until you press Delete, and neither do we.
+      if (a === liveAnnot) { drawMarquee(ctx, x, y, w, h); break; }
+      // A solid block that removes a distraction - a stray tooltip, a dev banner, a
+      // name in the corner. Deliberately NOT the redaction tool: blur leaves a visible
+      // "something was hidden here", which is what a bug report should show.
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(x, y, w, h);
+      break;
+    }
     case "step": {
       // Auto-numbered by position among step badges (so undo/redo renumbers cleanly).
       const steps = annotations.filter((s) => s.type === "step");
@@ -1779,7 +1866,7 @@ async function restoreRecent(id) {
   try { endCrop(); } catch (_) {}
   for (const s of segments) s.canvas.remove();
   if (annotCanvas) { annotCanvas.remove(); annotCanvas = null; annotCtx = null; }
-  annotations = []; undoStack = []; redoStack = []; liveAnnot = null; drag = null; clearActiveAnnot();
+  annotations = []; undoStack = []; redoStack = []; liveAnnot = null; drag = null; clearActiveAnnot(); clearPendingSel();
 
   const canvas = document.createElement("canvas");
   canvas.width = bmp.width; canvas.height = bmp.height;
