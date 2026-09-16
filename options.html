@@ -1,214 +1,427 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <title>Full Page Capture — Settings</title>
   <style>
+    /* ============================ Design tokens ============================
+       The SAME set as popup.html and result.css. Two ink tiers, two border
+       weights, two radii, one accent. The ratios in the comments are measured,
+       so the next person does not have to re-derive them. */
     :root {
       color-scheme: light dark;
-      --panel:#ffffff; --border:#e6e8ef; --text:#0f172a; --muted:#6b7280;
-      --field:#ffffff; --field-border:#d7dbe4; --accent:#0d9488;
-      --accent-grad:linear-gradient(135deg,#0d9488,#14b8a6); --ring:rgba(13,148,136,.32);
-      --shadow: 0 6px 24px rgba(16,24,40,.08), 0 1px 3px rgba(16,24,40,.06);
-      --bg1:#eef1f6; --bg2:#e6e9f1;
+
+      --ground:    #f2f3f5;
+      --surface:   #ffffff;
+      --surface-2: #edeff2;   /* the one hover fill */
+      --surface-3: #e3e6ea;   /* the one press fill, and slider tracks */
+
+      --rule: #e4e7eb;        /* divides inside a box */
+      --edge: #8d95a1;        /* 3.02:1 - bounds anything interactive */
+
+      --text:  #12151a;       /* 18.29:1 */
+      --muted: #5b6472;       /* 5.98:1 */
+
+      --accent:      #0f766e; /* 5.47:1 under white, and as ink on white */
+      --on-accent:   #ffffff;
+
+      --danger: #b42318;      /* 6.57:1 */
+
+      --r1: 4px;
+      --r2: 6px;
+      --pop: 0 8px 20px -10px rgba(9, 12, 17, .35), 0 1px 2px rgba(9, 12, 17, .10);
     }
     @media (prefers-color-scheme: dark) {
-      :root { --panel:#1a2030; --border:#2b3242; --text:#e8eaf1; --muted:#94a0b4;
-        --field:#232a3b; --field-border:#3a4256; --bg1:#10141d; --bg2:#0b0e15;
-        --shadow: 0 8px 28px rgba(0,0,0,.45); }
+      :root {
+        --ground:    #0e1013;
+        --surface:   #16191d;
+        --surface-2: #1d2126;
+        --surface-3: #242a31;
+        --rule: #262b31;
+        --edge: #646b75;
+        --text:  #e6e9ec;
+        --muted: #9ba3ae;
+        --accent:      #2dd4bf;
+        --on-accent:   #04211f; /* 9.08:1 - white here would be 1.86:1 */
+        --danger: #fda29b;
+        --pop: 0 10px 24px -10px rgba(0, 0, 0, .60), 0 1px 2px rgba(0, 0, 0, .40);
+      }
     }
+
     * { box-sizing: border-box; }
     body {
-      font: 14.5px/1.55 -apple-system, system-ui, "Segoe UI", Roboto, Arial, sans-serif;
-      max-width: 660px; margin: 0 auto; padding: 40px 24px 72px; color: var(--text);
-      background:
-        radial-gradient(900px 400px at 10% -10%, rgba(13,148,136,.10), transparent 60%),
-        radial-gradient(700px 350px at 100% 0%, rgba(20,184,166,.08), transparent 55%),
-        linear-gradient(180deg, var(--bg1), var(--bg2));
+      margin: 0; padding: 0;
+      background: var(--ground); color: var(--text);
+      font: 13px/1.5 -apple-system, "Segoe UI Variable Text", "Segoe UI", system-ui, Roboto, Arial, sans-serif;
       -webkit-font-smoothing: antialiased;
     }
-    h1 { font-size: 23px; font-weight: 800; letter-spacing: .2px; display:flex; align-items:center; gap:11px; margin: 0 0 4px; }
-    h1 img { width: 30px; height: 30px; border-radius: 8px; box-shadow: var(--shadow); }
-    .card {
-      background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
-      padding: 4px 22px; margin-top: 16px; box-shadow: var(--shadow);
+    .wrap { max-width: 720px; margin: 0 auto; padding: 32px 24px 0; }
+
+    /* one focus rule, as an outline so no later box-shadow can cancel it */
+    :where(button, a, input, select, summary, [tabindex]):focus-visible {
+      outline: 2px solid var(--accent); outline-offset: 2px;
     }
+
+    h1 { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 600; letter-spacing: -.2px; margin: 0 0 4px; }
+    h1 img { width: 20px; height: 20px; border-radius: 3px; }
+    .sub { color: var(--muted); font-size: 13px; margin: 0 0 28px; }
+
+    /* Eleven unrelated settings used to sit in one undifferentiated card, so
+       nothing told you which ones belonged together. */
+    .eyebrow {
+      font-family: ui-monospace, "Cascadia Mono", SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px; font-weight: 500; line-height: 16px; letter-spacing: .06em;
+      text-transform: uppercase; color: var(--muted);
+      margin: 26px 0 8px; padding: 0 2px;
+    }
+    .card {
+      background: var(--surface); border: 1px solid var(--rule); border-radius: var(--r2);
+      padding: 0 16px;
+    }
+
+    /* A two-column grid, not a flex row: the control rail stays straight no
+       matter how long a description runs. */
     .row {
-      display: flex; align-items: center; justify-content: space-between;
-      gap: 20px; padding: 16px 0; border-bottom: 1px solid var(--border);
+      display: grid; grid-template-columns: 1fr 232px; align-items: start;
+      gap: 20px; padding: 14px 0; border-bottom: 1px solid var(--rule);
     }
     .row:last-child { border-bottom: none; }
-    .row .label { font-weight: 700; font-size: 14px; }
-    .row .muted { font-size: 12.5px; font-weight: 400; margin-top: 3px; }
-    .muted { color: var(--muted); }
-    ol { margin: 8px 0 0; padding-left: 20px; } ol li { margin: 4px 0; }
-    select, input[type=text] {
-      padding: 9px 12px; border: 1px solid var(--field-border); border-radius: 9px;
-      font: inherit; min-width: 150px; background: var(--field); color: var(--text);
-      transition: border-color .12s, box-shadow .12s;
+    .rlabel { display: block; font-size: 13px; font-weight: 500; cursor: pointer; }
+    .rdesc { font-size: 12px; color: var(--muted); margin-top: 3px; }
+    .rdesc b { font-weight: 600; color: var(--text); }
+    .ctrl { display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-height: 28px; }
+
+    select, input[type="text"] {
+      width: 100%; height: 28px; padding: 0 9px;
+      border: 1px solid var(--edge); border-radius: var(--r1);
+      font: inherit; font-size: 13px; background: var(--surface); color: var(--text);
+      transition: border-color .12s;
     }
-    select:focus, input[type=text]:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
-    input[type=text] { min-width: 240px; }
-    input[type=range] { width: 160px; accent-color: var(--accent); }
-    .switch { position: relative; width: 46px; height: 26px; flex: 0 0 auto; }
-    .switch input { opacity: 0; width: 0; height: 0; }
-    .slider { position:absolute; inset:0; background:#cbd5e1; border-radius: 999px; cursor:pointer; transition: .2s; }
-    .slider::before { content:""; position:absolute; width:20px; height:20px; left:3px; top:3px; background:#fff; border-radius:50%; transition:.2s; box-shadow: 0 1px 3px rgba(0,0,0,.25); }
-    @media (prefers-color-scheme: dark) { .slider { background:#3a4256; } }
-    .switch input:checked + .slider { background: var(--accent); }
-    .switch input:checked + .slider::before { transform: translateX(20px); }
-    .actions { margin-top: 24px; display:flex; align-items:center; gap:14px; }
+    select:hover, input[type="text"]:hover { border-color: var(--text); }
+
+    /* The readout sits WITH the slider. It used to live in the opposite corner
+       of the row, mid-sentence, in the page's faintest style. */
+    .val {
+      flex: 0 0 auto; min-width: 46px; text-align: right;
+      font-family: ui-monospace, "Cascadia Mono", SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; color: var(--text);
+    }
+    input[type="range"] {
+      -webkit-appearance: none; appearance: none;
+      --fill: .5;                       /* 0..1, set by JS */
+      height: 20px; background: transparent; cursor: pointer;
+    }
+    input[type="range"]::-webkit-slider-runnable-track {
+      height: 4px; border-radius: 4px;
+      background: linear-gradient(to right,
+        var(--text) 0 calc(5px + (100% - 10px) * var(--fill)),
+        var(--surface-3) calc(5px + (100% - 10px) * var(--fill)) 100%);
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none; margin-top: -3px;
+      width: 10px; height: 10px; border-radius: 2px; border: 0; background: var(--text);
+      /* without this the handle is the same ink as the fill it sits on - 1:1 */
+      box-shadow: 0 0 0 2px var(--surface);
+      cursor: pointer;
+    }
+    input[type="range"]::-moz-range-track { height: 4px; border-radius: 4px; background: var(--surface-3); }
+    input[type="range"]::-moz-range-progress { height: 4px; border-radius: 4px; background: var(--text); }
+    input[type="range"]::-moz-range-thumb {
+      width: 10px; height: 10px; border-radius: 2px; border: 0; background: var(--text);
+      box-shadow: 0 0 0 2px var(--surface); cursor: pointer;
+    }
+
+    /* 44x24 with an 18px knob. The seven switches had no focus indicator at
+       all; :focus-visible on the input paints the ring on the track. */
+    .switch { position: relative; width: 44px; height: 24px; flex: 0 0 auto; }
+    /* The input covers the whole track and sits ABOVE the painted slider, or the
+       slider would swallow every click. */
+    .switch input {
+      -webkit-appearance: none; appearance: none;  /* or Blink pins it to 13x13 */
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      z-index: 1; opacity: 0; margin: 0; cursor: pointer;
+    }
+    .slider {
+      position: absolute; inset: 0; background: var(--surface-3);
+      border: 1px solid var(--edge); border-radius: 999px; cursor: pointer; transition: background .15s, border-color .15s;
+    }
+    .slider::before {
+      content: ""; position: absolute; width: 18px; height: 18px; left: 2px; top: 2px;
+      background: var(--muted); border-radius: 50%; transition: transform .15s, background .15s;
+    }
+    .switch input:checked + .slider { background: var(--accent); border-color: var(--accent); }
+    .switch input:checked + .slider::before { transform: translateX(20px); background: var(--on-accent); }
+    .switch input:focus-visible + .slider { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    code {
+      font-family: ui-monospace, "Cascadia Mono", SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px; background: var(--surface-2); border: 1px solid var(--rule);
+      padding: 1px 5px; border-radius: 3px;
+    }
+    a { color: var(--accent); }
+
+    /* The OAuth procedure was the largest block of copy on the page and the one
+       the team guide tells people to skip. It is a disclosure now, shut. */
+    details.adv { margin: 10px 0 4px; }
+    details.adv > summary {
+      list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px;
+      padding: 10px 0; font-size: 13px; font-weight: 500; color: var(--muted);
+    }
+    details.adv > summary::-webkit-details-marker { display: none; }
+    details.adv > summary::before {
+      content: ""; width: 6px; height: 6px; flex: 0 0 auto;
+      border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+      transform: rotate(-45deg); transition: transform .15s;
+    }
+    details.adv[open] > summary::before { transform: rotate(45deg); }
+    details.adv[open] > summary { color: var(--text); }
+    .adv-body { padding: 4px 0 10px 14px; border-left: 2px solid var(--rule); color: var(--muted); font-size: 12.5px; }
+    .adv-body b { font-weight: 600; color: var(--text); }
+    .adv-body ol { margin: 6px 0 0; padding-left: 18px; }
+    .adv-body li { margin: 5px 0; }
+
+    /* The one string on this page that must be copied character-perfect. */
+    .uri {
+      display: flex; align-items: center; gap: 8px; margin: 8px 0;
+      border: 1px solid var(--edge); border-radius: var(--r1); background: var(--surface);
+    }
+    .uri code {
+      flex: 1; min-width: 0; border: 0; background: transparent; padding: 8px 10px;
+      user-select: all; word-break: break-all; color: var(--text);
+    }
+    .copybtn {
+      flex: 0 0 auto; margin: 4px; height: 26px; padding: 0 10px;
+      border: 1px solid var(--edge); border-radius: var(--r1);
+      background: var(--surface); color: var(--text);
+      font: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
+      transition: background .12s;
+    }
+    .copybtn:hover { background: var(--surface-2); }
+    .copybtn:active { background: var(--surface-3); }
+    .copybtn { min-width: 74px; }   /* holds its width while the label changes */
+
+    /* Save used to be a gradient slab at the bottom of a 2000px column, with a
+       2.49:1 label. It is the one accent fill on the page, and it follows you. */
+    .savebar {
+      position: sticky; bottom: 0; margin-top: 28px;
+      background: color-mix(in srgb, var(--ground) 88%, transparent);
+      -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+      border-top: 1px solid var(--rule); box-shadow: var(--pop);
+    }
+    .savebar .inner { max-width: 720px; margin: 0 auto; padding: 12px 24px; display: flex; align-items: center; gap: 14px; }
     button.save {
-      background: var(--accent-grad); color:#fff; border:0; padding: 12px 26px; border-radius: 11px;
-      font-weight:750; font-size:14px; cursor:pointer; box-shadow: 0 6px 18px var(--ring);
-      transition: transform .12s, box-shadow .12s, filter .12s;
+      height: 32px; padding: 0 16px; border: 1px solid var(--accent); border-radius: var(--r1);
+      background: var(--accent); color: var(--on-accent);
+      font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+      transition: background .12s;
     }
-    button.save:hover { transform: translateY(-1px); filter: brightness(1.05); box-shadow: 0 10px 26px var(--ring); }
-    button.save:active { transform: translateY(0); }
-    .status { color:#16a34a; font-weight:700; font-size:13px; opacity:0; transform: translateX(-6px); transition:opacity .2s, transform .2s; }
-    @media (prefers-color-scheme: dark) { .status { color:#4ade80; } }
-    .status.show { opacity:1; transform: none; }
-    code { background: color-mix(in srgb, var(--accent) 14%, transparent); color: color-mix(in srgb, var(--accent) 60%, var(--text));
-      padding: 1.5px 6px; border-radius: 5px; font-size: 12px; font-family: ui-monospace, monospace; }
+    button.save:hover { background: color-mix(in srgb, var(--accent) 88%, var(--text)); }
+    button.save:active { background: color-mix(in srgb, var(--accent) 78%, var(--text)); }
+    .status {
+      display: inline-flex; align-items: center; gap: 5px;
+      color: var(--accent); font-size: 13px; font-weight: 500;
+      opacity: 0; visibility: hidden; transform: translateX(-4px);
+      transition: opacity .18s, transform .18s;
+    }
+    .status.show { opacity: 1; visibility: visible; transform: none; }
+    .status svg { width: 14px; height: 14px; fill: none; stroke: currentColor;
+      stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .status.fail { color: var(--danger); }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+    }
   </style>
 </head>
 <body>
+<div class="wrap">
   <h1><img src="icons/icon48.png" alt="" /> Settings</h1>
+  <p class="sub">Full Page Capture &mdash; these apply to every capture from now on.</p>
 
+  <div class="eyebrow">Output</div>
   <div class="card">
     <div class="row">
       <div>
-        <div class="label">Default export format</div>
-        <div class="muted">Used by the one-click download button in the editor.</div>
+        <label class="rlabel" for="format">Default export format</label>
+        <div class="rdesc">Used by the one-click download button in the editor.</div>
       </div>
-      <select id="format">
-        <option value="png">PNG (lossless)</option>
-        <option value="jpg">JPG (smaller)</option>
-        <option value="pdf">PDF</option>
-      </select>
+      <div class="ctrl">
+        <select id="format">
+          <option value="png">PNG (lossless)</option>
+          <option value="jpg">JPG (smaller)</option>
+          <option value="pdf">PDF</option>
+        </select>
+      </div>
     </div>
 
     <div class="row">
       <div>
-        <div class="label">JPG / PDF quality</div>
-        <div class="muted">Higher = better quality, larger file. <span id="qval">92%</span></div>
+        <label class="rlabel" for="jpegQuality">JPG / PDF quality</label>
+        <div class="rdesc">Higher means better quality and a larger file.</div>
       </div>
-      <input type="range" id="jpegQuality" min="0.4" max="1" step="0.01" />
+      <div class="ctrl">
+        <input type="range" id="jpegQuality" min="0.4" max="1" step="0.01" />
+        <span class="val" id="qval">92%</span>
+      </div>
     </div>
 
     <div class="row">
       <div>
-        <div class="label">Render delay per section</div>
-        <div class="muted">Extra wait after each scroll so content settles. <span id="dval">130 ms</span></div>
+        <label class="rlabel" for="filenameTemplate">File name template</label>
+        <div class="rdesc">Tokens: <code>{title}</code> <code>{date}</code> <code>{time}</code> <code>{host}</code></div>
+        <div class="rdesc" id="fnamePreview"></div>
       </div>
-      <input type="range" id="tileDelay" min="0" max="800" step="10" />
-    </div>
-
-    <div class="row">
-      <div>
-        <div class="label">Pre-scroll to load lazy images</div>
-        <div class="muted">Only needed for pages with lazy-loaded images. Adds an extra smooth scroll pass before capturing. Off by default (most pages, incl. reports, don't need it).</div>
+      <div class="ctrl">
+        <input type="text" id="filenameTemplate" />
       </div>
-      <label class="switch"><input type="checkbox" id="preScroll" /><span class="slider"></span></label>
-    </div>
-
-    <div class="row">
-      <div>
-        <div class="label">Smooth scroll animation</div>
-        <div class="muted">Glide smoothly between sections while capturing (no extra time).</div>
-      </div>
-      <label class="switch"><input type="checkbox" id="smoothScroll" /><span class="slider"></span></label>
-    </div>
-
-    <div class="row">
-      <div>
-        <div class="label">Add URL &amp; time bar</div>
-        <div class="muted">Stamp a bar with the page URL and capture date/time on top of the screenshot (great for bug reports). Toggle per-capture in the editor.</div>
-      </div>
-      <label class="switch"><input type="checkbox" id="infoBar" /><span class="slider"></span></label>
-    </div>
-
-    <div class="row">
-      <div>
-        <div class="label">Keep recent captures</div>
-        <div class="muted"><b>Off by default.</b> When on, your last 3 captures - and any annotations you add to them - are kept
-          in this browser, so a result tab closed by mistake is not lost work. They stay <b>on this PC only</b> and are never
-          uploaded anywhere. Turning this off again deletes anything already kept.</div>
-      </div>
-      <label class="switch"><input type="checkbox" id="recentEnabled" /><span class="slider"></span></label>
-    </div>
-
-    <div class="row">
-      <div>
-        <div class="label">Include environment info in the bar</div>
-        <div class="muted">Adds a second line: Browser · OS · Viewport · DPR — auto-filled from the captured page. Very handy for bug reports.</div>
-      </div>
-      <label class="switch"><input type="checkbox" id="envBar" /><span class="slider"></span></label>
-    </div>
-
-    <div class="row">
-      <div>
-        <div class="label">Hide sticky / fixed elements</div>
-        <div class="muted">Prevents floating headers &amp; cookie bars repeating down the page.</div>
-      </div>
-      <label class="switch"><input type="checkbox" id="hideFixed" /><span class="slider"></span></label>
-    </div>
-
-    <div class="row">
-      <div>
-        <div class="label">File name template</div>
-        <div class="muted">Tokens: <code>{title}</code> <code>{date}</code> <code>{time}</code> <code>{host}</code></div>
-        <div class="muted" id="fnamePreview" style="margin-top:5px;"></div>
-      </div>
-      <input type="text" id="filenameTemplate" />
     </div>
   </div>
 
-  <h1 style="font-size:19px;margin-top:30px;">☁️ Send to Google Drive</h1>
+  <div class="eyebrow">Capture</div>
   <div class="card">
-    <div class="row" style="display:block;">
-      <div class="muted" style="line-height:1.7;">
-        One-time setup (so the extension can upload to <b>your</b> Drive):
-        <ol style="margin:8px 0 0; padding-left:20px;">
-          <li>Go to <code>console.cloud.google.com</code> → create/select a project.</li>
-          <li><b>APIs &amp; Services → Library</b> → enable <b>Google Drive API</b>.</li>
-          <li><b>APIs &amp; Services → OAuth consent screen</b> → set it up (External, add yourself as a Test user).</li>
-          <li><b>Credentials → Create Credentials → OAuth client ID → Web application</b>.</li>
-          <li>Under <b>Authorized redirect URIs</b>, add exactly this:
-            <div style="margin:6px 0;"><code id="redirectUri" style="user-select:all;word-break:break-all;">…</code></div>
-          </li>
-          <li>Copy the generated <b>Client ID</b> and paste it below. Paste your target Drive <b>folder</b> (URL or ID) too.</li>
-        </ol>
-        <p style="margin:10px 0 0;">On first use Google shows a consent screen asking for Drive access (needed to place files in your chosen folder), and — because your app is unverified/in testing — an <b>“unverified app”</b> warning: click <b>Advanced → Go to (app) (unsafe)</b> to proceed. This is your own app; it stays private to you.</p>
-      </div>
-    </div>
     <div class="row">
       <div>
-        <div class="label">OAuth Client ID</div>
-        <div class="muted">Ends with <code>.apps.googleusercontent.com</code></div>
+        <label class="rlabel" for="tileDelay">Render delay per section</label>
+        <div class="rdesc">Extra wait after each scroll so content settles.</div>
       </div>
-      <input type="text" id="driveClientId" placeholder="xxxx.apps.googleusercontent.com" />
+      <div class="ctrl">
+        <input type="range" id="tileDelay" min="0" max="800" step="10" />
+        <span class="val" id="dval">130 ms</span>
+      </div>
     </div>
+
     <div class="row">
       <div>
-        <div class="label">Target Drive folder</div>
-        <div class="muted">Paste the folder's URL or ID. Leave blank to upload to your Drive root. Tip: share this folder with your dev/team once — then the private links you send just work, no public sharing needed.</div>
+        <label class="rlabel" for="preScroll">Pre-scroll to load lazy images</label>
+        <div class="rdesc">Only needed for pages with lazy-loaded images. Adds an extra smooth scroll pass before capturing. Off by default &mdash; most pages, reports included, do not need it.</div>
       </div>
-      <input type="text" id="driveFolderId" placeholder="https://drive.google.com/drive/folders/…" />
+      <div class="ctrl">
+        <span class="switch"><input type="checkbox" id="preScroll" /><span class="slider"></span></span>
+      </div>
     </div>
+
     <div class="row">
       <div>
-        <div class="label">Make links public (anyone with the link)</div>
-        <div class="muted"><b>Off by default for privacy.</b> Leave off if your folder is shared with the team. Turn on only if you send links to people outside the folder — screenshots can contain sensitive data.</div>
+        <label class="rlabel" for="smoothScroll">Smooth scroll animation</label>
+        <div class="rdesc">Glide smoothly between sections while capturing. Costs no extra time.</div>
       </div>
-      <label class="switch"><input type="checkbox" id="driveShareAnyone" /><span class="slider"></span></label>
+      <div class="ctrl">
+        <span class="switch"><input type="checkbox" id="smoothScroll" /><span class="slider"></span></span>
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label class="rlabel" for="hideFixed">Hide sticky / fixed elements</label>
+        <div class="rdesc">Stops floating headers and cookie bars repeating down the page.</div>
+      </div>
+      <div class="ctrl">
+        <span class="switch"><input type="checkbox" id="hideFixed" /><span class="slider"></span></span>
+      </div>
     </div>
   </div>
 
-  <div class="actions">
+  <div class="eyebrow">Stamp on the image</div>
+  <div class="card">
+    <div class="row">
+      <div>
+        <label class="rlabel" for="infoBar">Add URL &amp; time bar</label>
+        <div class="rdesc">Stamps a bar with the page URL and capture date/time on top of the screenshot &mdash; useful for bug reports. Can be toggled per capture in the editor.</div>
+      </div>
+      <div class="ctrl">
+        <span class="switch"><input type="checkbox" id="infoBar" /><span class="slider"></span></span>
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label class="rlabel" for="envBar">Include environment info in the bar</label>
+        <div class="rdesc">Adds a second line: Browser &middot; OS &middot; Viewport &middot; DPR, auto-filled from the captured page. Very handy for bug reports.</div>
+      </div>
+      <div class="ctrl">
+        <span class="switch"><input type="checkbox" id="envBar" /><span class="slider"></span></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="eyebrow">Privacy</div>
+  <div class="card">
+    <div class="row">
+      <div>
+        <label class="rlabel" for="recentEnabled">Keep recent captures</label>
+        <div class="rdesc">Off by default. When on, your last 3 captures &mdash; and any annotations on them &mdash; are kept in this browser, so a result tab closed by mistake is not lost work. They stay on this PC only and are never uploaded. <b>Turning this off again deletes anything already kept.</b></div>
+      </div>
+      <div class="ctrl">
+        <span class="switch"><input type="checkbox" id="recentEnabled" /><span class="slider"></span></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="eyebrow">Google Drive</div>
+  <div class="card">
+    <div class="row" style="grid-template-columns: 1fr">
+      <div>
+        <div class="rdesc" style="margin-top: 0">Send a finished capture straight to your own Drive folder and copy the shareable link. Needs a one-time setup, because the extension uploads to <b>your</b> Drive, not ours.</div>
+        <details class="adv">
+          <summary>One-time setup &mdash; you only do this once</summary>
+          <div class="adv-body">
+            <ol>
+              <li>Go to <code>console.cloud.google.com</code> and create or select a project.</li>
+              <li><b>APIs &amp; Services &rarr; Library</b> &rarr; enable <b>Google Drive API</b>.</li>
+              <li><b>APIs &amp; Services &rarr; OAuth consent screen</b> &rarr; set it up (External, add yourself as a Test user).</li>
+              <li><b>Credentials &rarr; Create Credentials &rarr; OAuth client ID &rarr; Web application</b>.</li>
+              <li>Under <b>Authorized redirect URIs</b>, add exactly this:
+                <div class="uri">
+                  <code id="redirectUri">&hellip;</code>
+                  <button type="button" class="copybtn" id="copyRedirect">Copy</button>
+                </div>
+              </li>
+              <li>Copy the generated <b>Client ID</b> and paste it below, along with your target Drive folder.</li>
+            </ol>
+            <p style="margin: 10px 0 0;">On first use Google asks for Drive access &mdash; it needs it to place files in the folder you choose &mdash; and, because your app is unverified and in testing, shows an <b>&ldquo;unverified app&rdquo;</b> warning: choose <b>Advanced &rarr; Go to (app) (unsafe)</b> to continue. It is your own app; it stays private to you.</p>
+          </div>
+        </details>
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label class="rlabel" for="driveClientId">OAuth Client ID</label>
+        <div class="rdesc">Ends with <code>.apps.googleusercontent.com</code></div>
+      </div>
+      <div class="ctrl">
+        <input type="text" id="driveClientId" placeholder="xxxx.apps.googleusercontent.com" />
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label class="rlabel" for="driveFolderId">Target Drive folder</label>
+        <div class="rdesc">Paste the folder's URL or ID. Leave blank to upload to your Drive root. Share this folder with your team once, and the private links you send just work &mdash; no public sharing needed.</div>
+      </div>
+      <div class="ctrl">
+        <input type="text" id="driveFolderId" placeholder="https://drive.google.com/drive/folders/…" />
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label class="rlabel" for="driveShareAnyone">Make links public (anyone with the link)</label>
+        <div class="rdesc">Off by default for privacy. Leave it off if your folder is shared with the team. <b>Turn it on only if you send links to people outside the folder — screenshots can contain sensitive data.</b></div>
+      </div>
+      <div class="ctrl">
+        <span class="switch"><input type="checkbox" id="driveShareAnyone" /><span class="slider"></span></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="savebar">
+  <div class="inner">
     <button class="save" id="save">Save settings</button>
-    <span class="status" id="status">Saved ✓</span>
+    <span class="status" id="status" role="status" aria-live="polite"><svg viewBox="0 0 24 24"><path id="statusMark" d="M5 13l4 4L19 7"></path></svg>Saved</span>
   </div>
+</div>
 
   <script src="config.js"></script>
   <script src="options.js"></script>

@@ -35,6 +35,8 @@ let quality = 0.92;
 let defaultSettings = { format: "png", jpegQuality: 0.92, filenameTemplate: "{title}-{date}", infoBar: true, envBar: true };
 let aborted = false;         // set once an unrecoverable error is shown
 let truncated = false;       // page was wider than the canvas limit
+let sectionCount = 0;        // scroll passes this capture was stitched from
+let wasCropped = false;      // the image on screen is a crop of the capture
 let scrollbarLeft = false;   // vertical scrollbar rendered on the left (RTL)
 let infoBar = true;          // stamp a URL + capture-time bar on top of the image
 let envBar = true;           // include a 2nd line with Browser/OS/Viewport/DPR
@@ -52,8 +54,8 @@ let recentSaveTimer = null;  // true once the job finished (or failed); restorin
 // Annotation state (single-segment images only)
 let annotCanvas = null, annotCtx = null;
 let annotating = false;
-let annotTool = "rect";
-let annotColor = "#e11d48";
+let annotTool = "select";
+let annotColor = "#D0264A";
 let annotWidth = 8;
 let annotations = [];
 // Undo/redo keeps SNAPSHOTS of the whole annotation list, not just the last item,
@@ -72,13 +74,13 @@ let activePointerId = null;
 let activeAnnot = null;      // the selected / just-drawn shape (Paint-style live editing)
 let activeTouched = false;   // has the active shape been edited in place yet? (one undo step per edit session)
 let drag = null;             // { a, sx, sy, orig, moved } while moving a shape with the Select tool
-const ANNOT_COLORS = ["#e11d48", "#f97316", "#facc15", "#22c55e", "#3b82f6", "#111827", "#ffffff"];
+const ANNOT_COLORS = ["#D0264A", "#C2530A", "#9A6700", "#0F7A42", "#1D5FD6", "#12151A", "#FFFFFF"];
 // QA bug-report stamps — click to drop a labelled pill (kind → label + colour).
 const STAMPS = {
-  bug:    { label: "BUG",     color: "#e11d48" },
-  pass:   { label: "PASS",    color: "#16a34a" },
-  fixed:  { label: "FIXED",   color: "#d97706" },
-  retest: { label: "RE-TEST", color: "#2563eb" }
+  bug:    { label: "BUG",     color: "#D0264A" },
+  pass:   { label: "PASS",    color: "#0F7A42" },
+  fixed:  { label: "FIXED",   color: "#9A6700" },
+  retest: { label: "RE-TEST", color: "#1D5FD6" }
 };
 let stampKind = "bug";
 
@@ -98,6 +100,7 @@ async function init() {
   const rbtn = el("recentBtn"); if (rbtn) rbtn.hidden = !recentEnabled;
   el("quality").value = quality;
   el("qualityVal").textContent = Math.round(quality * 100) + "%";
+  paintQuality();
   reflectFormat();
   wireTools();
 
@@ -120,6 +123,16 @@ async function init() {
   port.postMessage({ type: "ready", job: jobId });
   const rb = el("recentBtn"); if (rb) rb.disabled = true;   // re-enabled by settleCapture()
 }
+// Annotate is on whenever it can be: a single-canvas image, and not while
+// cropping. Those two are real constraints, not preferences - annotation does
+// not work across a split canvas (setupAnnotationLayer bails), and the crop
+// overlay owns the pointer while it is up.
+function maybeAnnot() {
+  if (annotating || cropping) return;
+  if (segments.length !== 1) return;
+  startAnnot();
+}
+
 function settleCapture() {
   captureSettled = true;
   const rb = el("recentBtn"); if (rb) { rb.disabled = false; rb.hidden = !recentEnabled; }
@@ -273,6 +286,7 @@ function bump() {
   const pct = expected ? Math.round((received / expected) * 100) : 100;
   progressFill.style.width = pct + "%";
   progressSub.textContent = `Section ${received} of ${expected}`;
+  sectionCount = expected;
 }
 
 /* ------------------------- Finalize ------------------------- */
@@ -285,14 +299,12 @@ function finalize() {
   applyInfoBar();            // stamp URL + time bar on top (if enabled)
   // Crop & annotate only make sense on a single-canvas image.
   const single = segments.length === 1;
-  el("crop").disabled = !single;
-  el("crop").style.opacity = single ? "" : ".45";
-  el("annotate").disabled = !single;
-  el("annotate").style.opacity = single ? "" : ".45";
+  el("crop").disabled = !single;   // the disabled look belongs to result.css
   reflectInfoBarBtn();
   updateDims();
   applyZoom();
   if (truncated) toast("This page is extremely wide — the right edge was cut to the browser's canvas limit.");
+  maybeAnnot();
   settleCapture();
   saveRecent();              // keep the last few captures so a closed tab isn't a lost capture
 }
@@ -300,9 +312,61 @@ function finalize() {
 function updateDims() {
   const w = segments[0] ? segments[0].canvas.width : fullWpx;
   const h = segments.reduce((a, s) => a + s.canvas.height, 0);
-  el("dims").textContent = `${w} × ${h} px`
-    + (segments.length > 1 ? `  ·  ${segments.length} parts` : "")
-    + (truncated ? "  ·  width truncated" : "");
+  // The identity strip says WHAT you are looking at; the status bar says
+  // what you will get. The long form (parts, truncation) moved there.
+  el("dims").textContent = `${w}×${h}`;
+  reflectStatus(w, h);
+}
+
+const TOOL_NAMES = { stamp: "Stamp", select: "Select", rect: "Box", ellipse: "Ellipse", arrow: "Arrow",
+  line: "Line", pen: "Pen", highlight: "Highlighter", text: "Text",
+  callout: "Callout", step: "Step", blur: "Blur", whiteout: "White out" };
+function reflectToolName(name) { const n = el("toolName"); if (n) n.textContent = name; }
+
+// The strip shows the current tool's own properties and nothing else.
+// Colour is meaningless for blur and for a stamp (a stamp carries its own
+// meaning-colour); the stamp chips are only relevant under the stamp tool.
+// Slots are hidden with the [hidden] attribute, never removed - the [ and ]
+// shortcuts reach into #awidth and dispatch synthetic events, so the slider
+// has to stay in the DOM either way.
+function reflectToolSlots() {
+  const isStamp = annotTool === "stamp";
+  const c = el("slotColour"), k = el("slotStamp");
+  if (c) c.hidden = isStamp || annotTool === "blur" || annotTool === "whiteout";
+  if (k) k.hidden = !isStamp;
+  if (isStamp) {
+    document.querySelectorAll(".astamp").forEach((b) =>
+      b.classList.toggle("active", b.dataset.stamp === stampKind));
+  }
+}
+
+// Purely reflective: reads meta / segments / currentFormat and writes text.
+// Nothing here changes what the editor does.
+function reflectStatus(w, h) {
+  const t = el("capTitle");
+  if (t) {
+    let s = (meta && meta.title) || "";
+    if (!s && meta && meta.url) {
+      try { s = new URL(meta.url).hostname.replace(/^www\./, ""); } catch (_) { s = meta.url; }
+    }
+    t.textContent = s;
+    t.title = s;
+  }
+  if (w === undefined) {
+    w = segments[0] ? segments[0].canvas.width : fullWpx;
+    h = segments.reduce((a, s) => a + s.canvas.height, 0);
+  }
+  const f = el("stFormat"); if (f) f.textContent = String(currentFormat || "png").toUpperCase();
+  const d = el("stDims");   if (d) d.textContent = `${w}×${h}`;
+  const p = el("stParts");
+  if (p) {
+    const bits = [];
+    if (sectionCount > 1) bits.push(sectionCount + " sections");
+    if (segments.length > 1) bits.push(segments.length + " parts");
+    if (wasCropped) bits.push("cropped");
+    if (truncated) bits.push("width truncated");
+    p.textContent = bits.length ? bits.join(" · ") : "1 section";
+  }
 }
 
 /* ------------------------- Info bar (URL + time) ------------------------- */
@@ -425,7 +489,6 @@ function reflectInfoBarBtn() {
   const disabled = stampLocked || segments.length !== 1;
   btn.classList.toggle("on", infoBar);
   btn.disabled = disabled;
-  btn.style.opacity = disabled ? ".45" : "";
   btn.title = segments.length !== 1
     ? "URL/time bar can't be toggled on a multi-part image"
     : stampLocked
@@ -470,17 +533,50 @@ function toggleInfoBar() {
 
 /* ------------------------- Zoom ------------------------- */
 function fitScale() {
-  const avail = stage.clientWidth - 52;
+  const avail = stage.clientWidth - 38;   // 18px padding each side + the 1px host border
   const naturalCss = fullWpx / dpr;
   return Math.max(0.05, Math.min(1, avail / naturalCss));
 }
+// Total rendered height of the stitched image, in CSS px. Summed across
+// segments, because a gigantic page is split into several canvases.
+// Keeps the quality track's filled portion in step with its value.
+function paintQuality() {
+  const q = el("quality");
+  if (!q) return;
+  const min = parseFloat(q.min), max = parseFloat(q.max), v = parseFloat(q.value);
+  if (!isFinite(min) || !isFinite(max) || !isFinite(v) || max === min) return;
+  q.style.setProperty("--fill", String((v - min) / (max - min)));
+}
+
+function renderedHeight() {
+  return segments.reduce((a, s) => a + (parseFloat(s.canvas.style.height) || 0), 0);
+}
+
 function applyZoom() {
   const z = zoom === null ? fitScale() : zoom;
+  // Rescaling without an anchor drags the document by (scale delta x scroll
+  // offset). On an 8214px capture scrolled two thirds down, entering annotate
+  // threw the thing you were about to annotate a full screen off the top - you
+  // lost your place, then had to hunt for the bug a second time. Hold whatever
+  // was in the middle of the viewport instead.
+  // A fresh canvas (the URL-bar toggle swaps one in) carries no inline
+  // height, so fall back to what the stage is actually scrolling.
+  const prevH = renderedHeight() || Math.max(0, stage.scrollHeight - 36);
+  const anchor = prevH > 0 ? (stage.scrollTop + stage.clientHeight / 2) / prevH : null;
+
   for (const s of segments) {
     s.canvas.style.width = (s.canvas.width / dpr) * z + "px";
     s.canvas.style.height = (s.canvas.height / dpr) * z + "px";
   }
   syncAnnotSize();
+
+  if (anchor !== null) {
+    const newH = renderedHeight();
+    // > 0, never a truthiness test: a NaN here would silently snap an 8000px
+    // page back to the top on every frame of a window drag-resize.
+    if (newH > 0) stage.scrollTop = Math.max(0, anchor * newH - stage.clientHeight / 2);
+  }
+
   if (cropping && cropOverlay._reset) cropOverlay._reset(); // stale pixel selection after resize
   el("zoomVal").textContent = zoom === null ? "Fit" : Math.round(z * 100) + "%";
 }
@@ -488,6 +584,7 @@ function applyZoom() {
 /* ------------------------- Tools wiring ------------------------- */
 function reflectFormat() {
   el("downloadLabel").textContent = "Download " + currentFormat.toUpperCase();
+  reflectStatus();
   el("qualityGroup").hidden = !(currentFormat === "jpg" || currentFormat === "pdf");
   // Mark the live format in the list, so opening it answers "which one am I on?"
   const m = el("formatMenu");
@@ -511,14 +608,14 @@ function wireTools() {
     b.addEventListener("click", () => {
       currentFormat = b.dataset.fmt;
       reflectFormat();
-      el("formatMenu").hidden = true;
-      doDownload(currentFormat);
+      el("formatMenu").hidden = true;   // the menu only PICKS; the button downloads
     });
   });
 
   el("quality").addEventListener("input", (e) => {
     quality = parseFloat(e.target.value);
     el("qualityVal").textContent = Math.round(quality * 100) + "%";
+    paintQuality();
   });
 
   el("copy").addEventListener("click", doCopy);
@@ -543,7 +640,7 @@ function wireTools() {
   el("infobar").addEventListener("click", toggleInfoBar);
   el("crop").addEventListener("click", startCrop);
   el("cropApply").addEventListener("click", applyCrop);
-  el("cropCancel").addEventListener("click", endCrop);
+  el("cropCancel").addEventListener("click", () => { endCrop(); maybeAnnot(); });
 
   el("zoomIn").addEventListener("click", () => { zoom = Math.min(4, (zoom === null ? fitScale() : zoom) * 1.25); applyZoom(); });
   el("zoomOut").addEventListener("click", () => { zoom = Math.max(0.1, (zoom === null ? fitScale() : zoom) / 1.25); applyZoom(); });
@@ -566,7 +663,7 @@ function wireTools() {
     if (ctrl && k === "c" && !window.getSelection().toString()) { doCopy(); return; }
     if (ctrl && k === "z" && !e.shiftKey) { e.preventDefault(); annotUndo(); return; }
     if (ctrl && (k === "y" || (e.shiftKey && k === "z"))) { e.preventDefault(); annotRedo(); return; }
-    if (ctrl && k === "a") { e.preventDefault(); annotating ? exitAnnot() : startAnnot(); return; }
+    if (ctrl && k === "a") { e.preventDefault(); return; }   // nothing to toggle; nothing to select
 
     // ---- zoom: plain +/-/0 (Ctrl+= and Ctrl+- belong to the browser, we cannot take them) ----
     if (!ctrl && !e.altKey) {
@@ -577,10 +674,11 @@ function wireTools() {
 
     // ---- annotation-only keys ----
     if (annotating) {
-      // Esc first drops the live shape, then leaves annotate mode.
+      // Esc drops the live shape. It no longer leaves annotate mode - that
+      // mode is permanent now, and there would be no way back in.
       if (e.key === "Escape") {
         if (pendingSel) { clearPendingSel(); renderAnnots(); return; }
-        if (activeAnnot) clearActiveAnnot(); else exitAnnot();
+        if (activeAnnot) clearActiveAnnot();
         return;
       }
       if (e.key === "Delete" || e.key === "Backspace") {
@@ -602,7 +700,7 @@ function wireTools() {
           return;
         }
         // single-letter tool picks, like most drawing apps
-        const TOOLKEYS = { v: "select", r: "rect", o: "ellipse", a: "arrow", l: "line", p: "pen", h: "highlight", t: "text", n: "step", b: "blur", c: "callout", w: "whiteout" };
+        const TOOLKEYS = { v: "select", r: "rect", o: "ellipse", a: "arrow", l: "line", p: "pen", h: "highlight", t: "text", n: "step", b: "blur", c: "callout", s: "stamp", w: "whiteout" };
         const tool = TOOLKEYS[k];
         if (tool) {
           const btn = document.querySelector('.atool[data-tool="' + tool + '"]');
@@ -852,9 +950,11 @@ function applyCrop() {
   stampLocked = true;
   infoBarLink = null; // URL position no longer known after a crop; PDF link dropped
   reflectInfoBarBtn();
-  el("dims").textContent = `${fullWpx} × ${fullHpx} px (cropped)`;
+  wasCropped = true;
+  updateDims();
   endCrop();
   applyZoom();
+  maybeAnnot();
   toast("Cropped");
 }
 
@@ -877,14 +977,20 @@ function wireAnnotation() {
   });
   // Tool buttons
   document.querySelectorAll(".atool").forEach((btn) => {
-    if (btn.dataset.tool === annotTool) btn.classList.add("active");
+    if (btn.dataset.tool === annotTool) {
+      btn.classList.add("active");
+      reflectToolName(TOOL_NAMES[annotTool] || annotTool);
+      reflectToolSlots();
+    }
     btn.addEventListener("click", () => {
       annotTool = btn.dataset.tool;
+      reflectToolName(TOOL_NAMES[annotTool] || annotTool);
       clearActiveAnnot(); clearPendingSel();
       applyToolCursor();
       document.querySelectorAll(".atool").forEach((b) => b.classList.remove("active"));
       document.querySelectorAll(".astamp").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
+      reflectToolSlots();   // after the sweeps, or it re-arms nothing
     });
   });
   // QA stamp buttons — pick the "stamp" tool with a preset label + colour.
@@ -893,11 +999,14 @@ function wireAnnotation() {
       annotTool = "stamp";
       clearActiveAnnot(); clearPendingSel();
       stampKind = btn.dataset.stamp;
+      reflectToolName("Stamp · " + (STAMPS[stampKind] ? STAMPS[stampKind].label : ""));
+      reflectToolSlots();
       // A stamp carries its own meaning-colour (see the "stamp" branch of onAnnotDown,
       // which reads STAMPS[stampKind].color directly), so picking one must NOT touch
       // annotColor - doing that silently repainted the next shape you drew in the
       // stamp's colour and left no swatch highlighted.
-      document.querySelectorAll(".atool").forEach((b) => b.classList.remove("active"));
+      document.querySelectorAll(".atool").forEach((b) =>
+        b.classList.toggle("active", b.dataset.tool === "stamp"));
       document.querySelectorAll(".astamp").forEach((b) => b.classList.toggle("active", b === btn));
     });
   });
@@ -905,7 +1014,12 @@ function wireAnnotation() {
   // by 2.4 again, so whole-number steps jumped far too much). Remembered per machine —
   // the right thickness depends on the display, so chrome.storage.local, not sync.
   const wIn = el("awidth"), wVal = el("awidthVal");
-  const reflectWidth = () => { if (wVal) wVal.textContent = String(annotWidth); };
+  const reflectWidth = () => {
+    if (wVal) wVal.textContent = (annotWidth < 10 && annotWidth === Math.round(annotWidth))
+      ? "0" + annotWidth : String(annotWidth);
+    if (wIn) wIn.style.setProperty("--fill",
+      String((annotWidth - wIn.min) / (wIn.max - wIn.min)));
+  };
   wIn.addEventListener("input", (e) => {
     const v = parseFloat(e.target.value);
     annotWidth = (isFinite(v) && v > 0) ? v : 1;
@@ -931,8 +1045,6 @@ function wireAnnotation() {
     applyActiveColour();
   });
 
-  el("annotate").addEventListener("click", () => (annotating ? exitAnnot() : startAnnot()));
-  el("adone").addEventListener("click", exitAnnot);
   el("aundo").addEventListener("click", annotUndo);
   el("aredo").addEventListener("click", annotRedo);
   el("aclear").addEventListener("click", annotClear);
@@ -950,9 +1062,13 @@ function startAnnot() {
   if (!annotCanvas) setupAnnotationLayer();
   applyToolCursor();
   annotating = true;
-  el("annotbar").hidden = false;
-  el("annotate").classList.add("on");
+  el("astrip").hidden = false;
+  document.querySelector(".work").classList.add("annot");
   canvasHost.classList.add("annotating");
+  reflectToolSlots();
+  // The rail is always in the flow, so nothing rescales here - but the strip
+  // pushes the stage down 40px, and applyZoom's anchor absorbs that.
+  applyZoom();
   // Info-bar toggle stays available — toggling now shifts annotations to stay aligned.
 }
 function exitAnnot() {
@@ -961,9 +1077,10 @@ function exitAnnot() {
   pendingSel = null;
   cancelDrag();
   clearActiveAnnot();
-  el("annotbar").hidden = true;
-  el("annotate").classList.remove("on");
+  el("astrip").hidden = true;
+  document.querySelector(".work").classList.remove("annot");
   canvasHost.classList.remove("annotating");
+  applyZoom();
   renderAnnots();
 }
 
@@ -996,6 +1113,7 @@ function evtToImg(e) {
 
 function beginDrag(a, p, e, handle) {
   setActiveAnnot(a);
+  if (pendingSel && annotTool !== "whiteout") { clearPendingSel(); }
   activePointerId = e.pointerId;
   try { annotCanvas.setPointerCapture(e.pointerId); } catch (_) {}
   drag = { a: a, sx: p.x, sy: p.y, moved: false, handle: handle || null,
@@ -1049,7 +1167,6 @@ function onAnnotDown(e) {
     renderAnnots();
     return;
   }
-  if (pendingSel && annotTool !== "whiteout") { clearPendingSel(); }
   activePointerId = e.pointerId;
   // Capture so we still get the matching up/cancel even if released off-window.
   try { annotCanvas.setPointerCapture(e.pointerId); } catch (_) {}
@@ -1177,11 +1294,8 @@ function pushHistory() {
 
 // ---- Paint-style area selection -------------------------------------------
 // The White out tool drags a marquee; Delete turns it into a real block. Keeping the
-// marquee OUT of `annotations` means it can never be exported, undone or left behind
-// as an invisible empty shape.
-// The look of "this area is picked, nothing has happened to it yet". Used while the
-// drag is in flight and after it settles, so the two are indistinguishable - which is
-// the point: nothing changes on the image until Delete.
+// marquee OUT of the annotations list means it can never be exported, undone, or left
+// behind as an invisible empty shape.
 function drawMarquee(ctx, x, y, w, h) {
   const s = screenScale();
   ctx.save();
@@ -1207,12 +1321,12 @@ function commitPendingSel() {
   const a = { type: "whiteout", color: annotColor, width: annotWidth * dpr,
               x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2 };
   annotations.push(a);
-  setActiveAnnot(a);          // selected, so it can be moved, resized, or Delete'd away
+  setActiveAnnot(a);          // selected, so it can be moved, resized, or deleted again
   renderAnnots();
   return true;
 }
 
-// The hint line does double duty: it tells you Delete is the next step while an area is
+// The hint line does double duty: it says Delete is the next step while an area is
 // picked, and goes back to the move/resize hint once something is selected.
 function reflectHint() {
   const h = el("ahint");
@@ -1446,8 +1560,7 @@ function renderAnnots() {
   annotCtx.clearRect(0, 0, annotCanvas.width, annotCanvas.height);
   for (const a of annotations) drawAnnot(a);
   if (liveAnnot && !exportingAnnots) drawAnnot(liveAnnot);   // uncommitted stroke never exports
-  // The pending area: a marquee only, no ink. Two passes - dark then dashed light -
-  // so the edge reads on a white ERP page and on a dark one alike.
+  // The pending area: a marquee only, no ink.
   if (pendingSel && !exportingAnnots) {
     const px = Math.min(pendingSel.x1, pendingSel.x2), py = Math.min(pendingSel.y1, pendingSel.y2);
     drawMarquee(annotCtx, px, py, Math.abs(pendingSel.x2 - pendingSel.x1), Math.abs(pendingSel.y2 - pendingSel.y1));
@@ -1517,15 +1630,15 @@ function drawAnnot(a) {
       ctx.fillText(a.text, a.x1, a.y1);
       break;
     case "blur":
-      drawBlur(ctx, x, y, w, h);
+      drawBlur(ctx, x, y, w, h, a.width);
       break;
     case "whiteout": {
       // While the drag is still in flight this is only a SELECTION - Paint does not
       // paint until you press Delete, and neither do we.
       if (a === liveAnnot) { drawMarquee(ctx, x, y, w, h); break; }
-      // A solid block that removes a distraction - a stray tooltip, a dev banner, a
-      // name in the corner. Deliberately NOT the redaction tool: blur leaves a visible
-      // "something was hidden here", which is what a bug report should show.
+      // A solid block that removes a distraction. Deliberately NOT the redaction
+      // tool: blur leaves a visible "something was hidden here", which is what a
+      // bug report should show.
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(x, y, w, h);
       break;
@@ -1629,17 +1742,26 @@ function drawPath(ctx, pts) {
   ctx.stroke();
 }
 
-function drawBlur(ctx, x, y, w, h) {
+function drawBlur(ctx, x, y, w, h, strength) {
   const base = segments[0] && segments[0].canvas;
   if (!base || w < 2 || h < 2) return;
-  // Clamp to base bounds
+  // Clamp to base bounds. Trim the width/height by however much the origin
+  // moved, or a selection started off-canvas would keep its full extent.
+  const x0 = x, y0 = y;
   x = Math.max(0, Math.min(base.width - 1, x));
   y = Math.max(0, Math.min(base.height - 1, y));
-  w = Math.min(base.width - x, w);
-  h = Math.min(base.height - y, h);
+  w = Math.min(base.width - x, w - (x - x0));
+  h = Math.min(base.height - y, h - (y - y0));
   if (w < 2 || h < 2) return;
-  // Strong pixelation so redacted text is not legible (min ~8px blocks).
-  const block = Math.max(8, Math.round(Math.min(w, h) / 8));
+  // The Size control drives the block size. It used to be derived from the
+  // SELECTION instead, so the slider did nothing on a blur.
+  // The floor of 8 is not a preference: below it, 11px text starts to be
+  // readable again, and this is the control people redact passwords with.
+  const want = Math.max(8, Math.min(48, Math.round((strength || 8) * 1.5)));
+  // ...but a block that is large next to a THIN selection averages the strip
+  // to one flat colour, which reads as "nothing happened" rather than as a
+  // redaction. Keep at least three blocks across the short side.
+  const block = Math.min(want, Math.max(8, Math.floor(Math.min(w, h) / 3)));
   const tw = Math.max(1, Math.round(w / block));
   const th = Math.max(1, Math.round(h / block));
   const tmp = document.createElement("canvas");
@@ -1880,13 +2002,14 @@ async function restoreRecent(id) {
   dpr = rec.dpr || 1;
   captureTime = new Date(rec.ts);
   baseSeg0 = canvas; stampLocked = false; infoBarLink = null; aborted = false;
+  wasCropped = false;
   lastDriveLink = null;
   { const cl = el("copyLink"); if (cl) { cl.hidden = true; const s = cl.querySelector("span"); if (s) s.textContent = "Copy link"; } }
 
   progressWrap.hidden = true; errorWrap.hidden = true; stage.hidden = false; tools.hidden = false;
+  setTimeout(maybeAnnot, 0);   // after this path has finished rebuilding segments
   applyInfoBar();
-  el("crop").disabled = false; el("crop").style.opacity = "";
-  el("annotate").disabled = false; el("annotate").style.opacity = "";
+  el("crop").disabled = false;
   // Bring the saved markup back as real, editable annotations (stored bar-less, so
   // shift them down if the info bar is showing now).
   currentRecentId = rec.id;                   // further edits keep updating this row
@@ -2139,7 +2262,16 @@ function showError(message) {
 }
 
 let toastTimer = null;
+let stMsgTimer = null;
 function toast(text) {
+  // The pill is transient; the status bar keeps the last message
+  // around long enough to read it after the pill has gone.
+  const sm = el("stMsg");
+  if (sm) {
+    sm.textContent = text;
+    clearTimeout(stMsgTimer);
+    stMsgTimer = setTimeout(() => { sm.textContent = ""; }, 8000);
+  }
   const t = el("toast");
   t.textContent = text;
   t.hidden = false;

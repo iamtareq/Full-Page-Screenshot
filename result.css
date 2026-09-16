@@ -1,41 +1,68 @@
-/* ============================ Design system ============================ */
+/* ============================ Design system ============================
+   The SAME token set as popup.html and options.html. Two ink tiers, two border
+   weights, two radii, one accent, one shadow. Every colour here was chosen
+   against a measured contrast ratio; the numbers are in the comments so the
+   next person does not have to re-derive them.
+
+   Three things are deliberately gone:
+   - --accent-grad / --drive-grad. A second saturated colour (the Drive green)
+     sat next to the teal and out-ranked the primary action on every visual
+     axis. There is one accent now, and it marks the primary action only.
+   - The radial teal page wash. The stage exists to show a screenshot; tinting
+     the ground under it changes how the user reads their own image.
+   - Hover lifts (translateY + a bigger shadow) and filter: brightness(). Both
+     moved contrast the WRONG way in light mode. Hover is a fill change now,
+     one recipe for every control family in the file. */
 :root {
   color-scheme: light dark;
-  --bg-1: #eef1f6;
-  --bg-2: #e4e8f0;
-  --panel: #ffffff;
-  --panel-2: #f7f8fb;
-  --border: #e4e7ee;
-  --border-strong: #d3d8e2;
-  --text: #0f172a;
-  --muted: #6b7280;
-  --accent: #0d9488;
-  --accent-2: #14b8a6;
-  --accent-grad: linear-gradient(135deg, #0d9488 0%, #14b8a6 100%);
-  --drive-grad: linear-gradient(135deg, #10b981 0%, #059669 100%);
-  --ring: rgba(13, 148, 136, .32);
-  --checker: #dfe3ea;
-  --shadow-sm: 0 1px 2px rgba(16, 24, 40, .06), 0 1px 3px rgba(16, 24, 40, .05);
-  --shadow-md: 0 4px 12px rgba(16, 24, 40, .08), 0 2px 4px rgba(16, 24, 40, .05);
-  --shadow-lg: 0 18px 48px rgba(16, 24, 40, .18);
-  --radius: 11px;
-  --radius-sm: 8px;
+
+  --ground:    #f2f3f5;   /* the page + the stage the capture lies on */
+  --surface:   #ffffff;   /* toolbar, bars, cards, menus, drawer */
+  --surface-2: #edeff2;   /* the one hover fill */
+  --surface-3: #e3e6ea;   /* the one press fill */
+
+  /* --rule divides things already inside a box; --edge bounds anything you can
+     press, and is the only one that has to clear WCAG 1.4.11 (3:1). The old
+     single hairline was 1.24:1 and was doing both jobs badly. */
+  --rule: #e4e7eb;        /* 1.24:1 on white - decorative */
+  --edge: #8d95a1;        /* 3.02:1 on white - interactive boundary */
+
+  --text:  #12151a;       /* 18.29:1 */
+  --muted: #5b6472;       /* 5.98:1 on --surface, 5.19:1 on --surface-2 */
+
+  --accent:      #0f766e; /* 5.47:1 as ink on white, and under white as a fill */
+  --accent-wash: #e9f3f1; /* the one "current / selected / mode is on" ground */
+
+  /* The ink that sits ON an accent fill. This file already knew the rule for
+     dark mode and wrote it down; making it a token makes it bidirectional, so
+     white-on-light-teal at 3.74:1 cannot come back. */
+  --on-accent: #ffffff;   /* 5.47:1 on #0f766e */
+
+  --danger: #b42318;      /* 6.57:1 - errors, destructive hover, nothing else */
+
+  --chrome-h: 44px;      /* toolbar height; the crop band pins to it */
+
+  --r1: 4px;              /* controls, chips, cells, menu rows */
+  --r2: 6px;              /* cards, menus, drawer, grouped rails */
+
+  /* ONE shadow, and only things that genuinely float above the page use it. */
+  --pop: 0 8px 20px -10px rgba(9, 12, 17, .35), 0 1px 2px rgba(9, 12, 17, .10);
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg-1: #10141d;
-    --bg-2: #0b0e15;
-    --panel: #1a2030;
-    --panel-2: #232a3b;
-    --border: #2a3142;
-    --border-strong: #363f54;
-    --text: #e8eaf1;
-    --muted: #94a0b4;
-    --checker: #242b38;
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3);
-    --shadow-md: 0 6px 18px rgba(0, 0, 0, .38);
-    --shadow-lg: 0 22px 55px rgba(0, 0, 0, .55);
-    --ring: rgba(45, 212, 191, .40);
+    --ground:    #0e1013;
+    --surface:   #16191d;
+    --surface-2: #1d2126;
+    --surface-3: #242a31;
+    --rule: #262b31;
+    --edge: #646b75;      /* 3.28:1 on --surface */
+    --text:  #e6e9ec;     /* 14.47:1 */
+    --muted: #9ba3ae;     /* 6.92:1 */
+    --accent:      #2dd4bf;
+    --accent-wash: #10231f;
+    --on-accent:   #04211f; /* 9.08:1 on #2dd4bf - white here would be 1.86:1 */
+    --danger: #fda29b;
+    --pop: 0 10px 24px -10px rgba(0, 0, 0, .60), 0 1px 2px rgba(0, 0, 0, .40);
   }
 }
 :root[data-theme="dark"] { color-scheme: dark; }
@@ -46,269 +73,409 @@
 html, body { height: 100%; }
 body {
   margin: 0;
-  font: 14px/1.45 -apple-system, system-ui, "Segoe UI", Roboto, Arial, sans-serif;
+  font: 13px/1.45 -apple-system, "Segoe UI Variable Text", "Segoe UI", system-ui, Roboto, Arial, sans-serif;
   color: var(--text);
-  background:
-    radial-gradient(1200px 600px at 15% -10%, rgba(13, 148, 136, .10), transparent 60%),
-    radial-gradient(1000px 500px at 100% 0%, rgba(20, 184, 166, .08), transparent 55%),
-    linear-gradient(180deg, var(--bg-1), var(--bg-2));
+  background: var(--ground);
   display: flex;
   flex-direction: column;
   -webkit-font-smoothing: antialiased;
 }
+/* Every number in the product is mono with tabular figures, so a value cannot
+   change width as it updates mid-drag. */
+.mono, .zoom span, .meta span, .awval {
+  font-family: ui-monospace, "Cascadia Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ONE focus rule for the whole page, expressed as `outline` rather than
+   `box-shadow`. That is the point: a later rule setting box-shadow - the
+   primary fill, .on, .drive, .ghost - silently cancelled the old box-shadow
+   ring, which left roughly half the toolbar with no focus indicator at all.
+   An outline cannot be cancelled that way. */
+:where(button, a, input, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 
 /* ============================ Toolbar ============================ */
 .toolbar {
-  display: flex; align-items: center; gap: 16px;
-  padding: 10px 18px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 12px; min-height: var(--chrome-h);
   position: sticky; top: 0; z-index: 20;
+  /* Still wraps on a narrow window - it cannot become a scroll container,
+     because .dl-menu is positioned inside it and overflow would clip the
+     format chooser away. What HAS changed: the offset the mode bands pin to
+     is one token instead of three magic numbers (57 / 57 / 54), and the
+     controls are narrower, so it wraps later than it used to. Making the
+     bands follow a wrapped toolbar needs JS, so that one is still open. */
   flex-wrap: wrap;
-  background: color-mix(in srgb, var(--panel) 78%, transparent);
-  -webkit-backdrop-filter: saturate(180%) blur(14px);
-  backdrop-filter: saturate(180%) blur(14px);
-  border-bottom: 1px solid var(--border);
-  box-shadow: 0 1px 0 rgba(255,255,255,.4) inset, var(--shadow-sm);
+  background: var(--surface);
+  border-bottom: 1px solid var(--rule);
 }
-.brand { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 800; letter-spacing: .2px; }
-.brand img { width: 26px; height: 26px; border-radius: 7px; box-shadow: var(--shadow-sm); }
-.brand span {
-  background: var(--accent-grad);
-  -webkit-background-clip: text; background-clip: text; color: transparent;
-}
-.tools { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-.group { display: flex; align-items: center; gap: 7px; position: relative; }
-.group.meta { margin-left: auto; }
+.brand { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.brand img { width: 16px; height: 16px; border-radius: 3px; }
+/* was gradient-clipped text, which fails contrast and cannot be selected */
+/* the capture's size, in the slot the wordmark used to hold */
+.brand #dims { color: var(--muted); font-size: 11px; font-weight: 500;
+  font-family: ui-monospace, "Cascadia Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums; }
+.tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; row-gap: 8px; justify-content: flex-end; }
+.group { display: flex; align-items: center; gap: 6px; position: relative; flex: 0 0 auto; }
+.tools { margin-left: auto; }
 
-/* Buttons */
+/* Buttons - one recipe, one hover, one press, one disabled. */
 .tbtn {
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 9px 13px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
-  background: var(--panel); color: var(--text);
-  font-size: 13px; font-weight: 650; cursor: pointer; white-space: nowrap;
-  box-shadow: var(--shadow-sm);
-  transition: transform .12s ease, box-shadow .12s ease, background .12s ease, border-color .12s ease, filter .12s ease;
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 32px; padding: 0 12px; border: 1px solid var(--edge); border-radius: var(--r1);
+  background: var(--surface); color: var(--text);
+  font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap;
+  transition: background .12s ease, border-color .12s ease, color .12s ease;
 }
-.tbtn:hover { background: var(--panel-2); transform: translateY(-1px); box-shadow: var(--shadow-md); }
-.tbtn:active { transform: translateY(0); box-shadow: var(--shadow-sm); }
-.tbtn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring); }
-.tbtn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.tbtn:hover { background: var(--surface-2); }
+.tbtn:active { background: var(--surface-3); }
+/* stroke = 24 / rendered px, so every glyph in the file draws a 1.0px line */
+.tbtn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.333; stroke-linecap: round; stroke-linejoin: round; }
 
-.tbtn.primary { background: var(--accent-grad); border: 0; color: #fff; box-shadow: 0 4px 14px var(--ring); padding: 10px 15px; }
-.tbtn.primary:hover { filter: brightness(1.06); box-shadow: 0 8px 22px var(--ring); }
-.tbtn.on { background: var(--accent-grad); border-color: transparent; color: #fff; box-shadow: 0 4px 14px var(--ring); }
-.tbtn.on svg { stroke: #fff; }
-.tbtn.drive { background: var(--drive-grad); border: 0; color: #fff; box-shadow: 0 4px 14px rgba(16, 185, 129, .35); }
-.tbtn.drive:hover { filter: brightness(1.05); box-shadow: 0 8px 22px rgba(16, 185, 129, .4); }
-.tbtn.drive svg { stroke: #fff; }
-.tbtn.drive:disabled { opacity: .6; }
-.tbtn.copylink { border-color: rgba(16, 185, 129, .5); color: #10b981; }
-.tbtn.copylink svg { stroke: #10b981; }
-.tbtn.copylink:hover { background: rgba(16, 185, 129, .12); }
-.tbtn:disabled { cursor: default; }
-.tbtn.ghost { padding: 8px 9px; background: transparent; border-color: transparent; box-shadow: none; color: var(--muted); }
-.tbtn.ghost:hover { background: var(--panel-2); color: var(--text); box-shadow: none; transform: none; }
+/* The accent marks one thing: this control is currently ON, or it is the
+   primary action. Nothing else in the file is allowed to take the fill. */
+.tbtn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+/* ON is the wash, not a fill: Download is the only solid accent in the bar. */
+.tbtn.on { background: var(--accent-wash); border-color: var(--accent); color: var(--accent); }
+.tbtn.primary:hover { background: color-mix(in srgb, var(--accent) 88%, var(--text)); }
+.tbtn.on:hover { background: color-mix(in srgb, var(--accent) 16%, var(--surface)); }
+.tbtn.on svg { stroke: currentColor; }
 
-/* Download + format split */
-/* ---- Download + format chooser -------------------------------------------
+/* Send to Drive is a SECONDARY action - a place to send the finished image,
+   not the finished image. It used to carry a second saturated gradient and a
+   coloured glow, which made it out-rank Download on colour, elevation and
+   shadow all at once. It keeps its label (it is the payoff of a bug-report
+   run and must stay findable) and gives up the colour. */
+.tbtn.drive,
+.tbtn.copylink { background: var(--surface); border-color: var(--edge); color: var(--text); }
+.tbtn.drive:hover,
+.tbtn.copylink:hover { background: var(--surface-2); }
+
+.tbtn.ghost { border-color: transparent; background: transparent; color: var(--muted); padding: 0 10px; }
+.tbtn.ghost:hover { background: var(--surface-2); color: var(--text); }
+
+/* ONE disabled recipe. Nothing lifts, nothing brightens, no hover fires. */
+.tbtn:disabled,
+.tbtn[disabled] { cursor: default; background: var(--surface); border-color: var(--rule); color: var(--muted); }
+.tbtn:disabled:hover,
+.tbtn[disabled]:hover { background: var(--surface); }
+
+/* Download + format split.
    ONE flat slab. Both halves are transparent children of .dl-shell, which owns
    the colour, the radius and the only shadow - so no gap, colour step or
    independent hover can ever split it in two again. */
 .dl { position: relative; display: inline-flex; }
 .dl-shell {
-  display: inline-flex; align-items: stretch; border-radius: var(--radius-sm);
-  /* deepened teal so 13px bold white text clears 4.5:1 on it */
-  background: #0c8277;
-  box-shadow: 0 2px 6px rgba(13, 148, 136, .26);
+  display: inline-flex; align-items: stretch; height: 32px; border-radius: var(--r1);
+  background: var(--accent);
 }
 .dl-main, .dl-caret {
-  display: inline-flex; align-items: center; gap: 8px; margin: 0;
-  border: 0; background: transparent; color: #fff; cursor: pointer;
-  font-weight: 650; font-size: 13px; line-height: 1; white-space: nowrap;
-  transition: background .13s ease;
+  display: inline-flex; align-items: center; gap: 6px; margin: 0;
+  border: 0; background: transparent; color: var(--on-accent); cursor: pointer;
+  font-family: inherit; font-weight: 500; font-size: 13px; line-height: 1; white-space: nowrap;
+  transition: background .12s ease;
 }
-.dl-main  { padding: 10px 15px; border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
-.dl-caret { position: relative; padding: 10px 11px; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.dl-main  { padding: 0 13px; border-radius: var(--r1) 0 0 var(--r1); }
+.dl-caret { position: relative; padding: 0 9px; border-radius: 0 var(--r1) var(--r1) 0; }
 /* the only separation: a short hairline fold */
 .dl-caret::before {
-  content: ""; position: absolute; left: 0; top: 9px; bottom: 9px;
-  width: 1px; background: rgba(255, 255, 255, .28);
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0;
+  width: 1px; background: color-mix(in srgb, var(--on-accent) 30%, transparent);
 }
-.dl-main:hover, .dl-caret:hover   { background: rgba(255, 255, 255, .12); }
-.dl-main:active, .dl-caret:active { background: rgba(255, 255, 255, .04); }
-/* An INSET white ring: always legible on teal, and it cannot round a half's
-   corners and make it look like a chip floating inside the slab. */
+.dl-main:hover, .dl-caret:hover   { background: color-mix(in srgb, var(--on-accent) 14%, transparent); }
+.dl-main:active, .dl-caret:active { background: color-mix(in srgb, var(--on-accent) 5%, transparent); }
+/* an INSET ring in the fill's own ink: always legible, and it cannot round a
+   half's corners and make it look like a chip floating inside the slab */
 .dl-main:focus-visible, .dl-caret:focus-visible {
-  outline: 2px solid #fff; outline-offset: -4px;
+  outline: 2px solid var(--on-accent); outline-offset: -4px;
 }
 .dl-main:disabled, .dl-caret:disabled { opacity: .55; cursor: default; }
-.dl-ico, .dl-chev { flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.dl-ico, .dl-chev { flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .dl-ico  { width: 16px; height: 16px; }
-.dl-chev { width: 14px; height: 14px; transition: transform .15s ease; }
+.dl-chev { width: 13px; height: 13px; stroke-width: 1.846; transition: transform .15s ease; }
 .dl:has(.dl-menu:not([hidden])) .dl-chev { transform: rotate(180deg); }
 .dl-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 .dl-menu {
-  position: absolute; top: calc(100% + 6px); left: 0; z-index: 40; min-width: 208px;
-  padding: 4px; background: var(--panel); border: 1px solid var(--border-strong);
-  border-radius: var(--radius); box-shadow: var(--shadow-lg); animation: pop .12s ease;
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 40; min-width: 208px;
+  padding: 4px; background: var(--surface); border: 1px solid var(--edge);
+  border-radius: var(--r2); box-shadow: var(--pop); animation: pop .12s ease;
 }
-@keyframes pop { from { opacity: 0; transform: translateY(-4px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes pop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 .dl-menu-head {
-  padding: 8px 10px 6px; font-weight: 700; font-size: 10px; line-height: 1; letter-spacing: .08em;
+  padding: 8px 10px 6px; font-weight: 600; font-size: 11px; line-height: 1; letter-spacing: .06em;
   text-transform: uppercase; color: var(--muted);
 }
 .dl-menu > button {
   display: flex; align-items: center; gap: 10px; width: 100%; margin: 0; padding: 8px 10px;
-  border: 0; border-radius: 7px; background: transparent; color: var(--text);
-  font-weight: 500; font-size: 13px; line-height: 1; text-align: left; cursor: pointer; transition: background .12s ease;
+  border: 0; border-radius: var(--r1); background: transparent; color: var(--text);
+  font-family: inherit; font-weight: 500; font-size: 13px; line-height: 1; text-align: left; cursor: pointer;
+  transition: background .12s ease;
 }
-.dl-menu > button:hover { background: var(--panel-2); }
-.dl-menu > button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.dl-name { min-width: 32px; font-weight: 700; font-size: 12.5px; }
-.dl-note { font-size: 11px; font-weight: 400; color: var(--muted); }
+.dl-menu > button:hover { background: var(--surface-2); }
+.dl-menu > button:focus-visible { outline-offset: -2px; }
+.dl-name { min-width: 32px; font-weight: 600; font-size: 13px; }
+.dl-note { font-size: 12px; font-weight: 400; color: var(--muted); }
 /* "you are here": the format that will actually be downloaded */
 .dl-tick { margin-left: auto; width: 15px; height: 15px; flex: 0 0 auto; opacity: 0;
-  fill: none; stroke: var(--accent); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
-.dl-menu > button[aria-current="true"] { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  fill: none; stroke: var(--accent); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.dl-menu > button[aria-current="true"] { background: var(--accent-wash); }
 .dl-menu > button[aria-current="true"] .dl-tick { opacity: 1; }
-.dl-menu > button[aria-current="true"] .dl-name { color: var(--accent); }
 
-/* On a dark ground a dark teal button sinks into the page, but no teal light
-   enough to stand out can carry WHITE text at 4.5:1 - so flip the polarity:
-   a bright face with dark text (9:1), the same trick the popup's update button uses. */
-@media (prefers-color-scheme: dark) {
-  .dl-shell { background: #2dd4bf; box-shadow: 0 2px 12px rgba(45, 212, 191, .28); }
-  .dl-main, .dl-caret { color: #04211f; }
-  .dl-caret::before { background: rgba(4, 33, 31, .28); }
-  .dl-main:hover, .dl-caret:hover { background: rgba(4, 33, 31, .12); }
-  .dl-main:active, .dl-caret:active { background: rgba(4, 33, 31, .04); }
-  .dl-main:focus-visible, .dl-caret:focus-visible { outline-color: #04211f; }
-}
-
-.quality label, .zoom span, .meta span { font-size: 12px; color: var(--muted); font-weight: 600; }
-.quality input { width: 108px; accent-color: var(--accent); }
+.quality label, .zoom span, .meta span { font-size: 12px; color: var(--muted); font-weight: 500; }
+.quality input { width: 100px; }
 .quality span { font-size: 12px; color: var(--muted); min-width: 34px; }
-.zoom span { min-width: 42px; text-align: center; }
-.meta span { font-variant-numeric: tabular-nums; padding: 5px 10px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border); }
-input[type="range"] { accent-color: var(--accent); }
+.zoom span { min-width: 36px; text-align: center; font-size: 11px; }
+.meta span { padding: 4px 9px; border-radius: var(--r1); background: var(--surface-2); border: 1px solid var(--rule); }
 
-/* ============================ Crop / Annotation bars ============================ */
+
+/* ============================ Crop band ============================
+   Crop is three controls, so it stays a horizontal band under the toolbar.
+   It used to be a saturated teal gradient carrying white text at 3.74:1
+   falling to 2.13:1 at the far end - the loudest thing on the page had the
+   least legible label. It is the accent wash with ink text now, and an accent
+   edge on the left to say "you are inside a mode". */
 .cropbar {
-  display: flex; align-items: center; gap: 10px; padding: 9px 18px; color: #fff;
-  background: var(--accent-grad); position: sticky; top: 57px; z-index: 19; box-shadow: var(--shadow-md);
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 8px 14px; min-height: 44px;
+  background: var(--surface); color: var(--text);
+  border-bottom: 1px solid var(--rule);
+  box-shadow: inset 3px 0 0 var(--accent);
+  position: sticky; top: var(--chrome-h); z-index: 19;
   animation: slidedown .16s ease;
 }
 @keyframes slidedown { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 .cropbar .spacer { flex: 1; }
-.cropbar .tbtn { background: rgba(255,255,255,.18); border-color: rgba(255,255,255,.35); color: #fff; box-shadow: none; }
-.cropbar .tbtn:hover { background: rgba(255,255,255,.28); }
-.cropbar .tbtn.ghost { background: transparent; border-color: transparent; }
+/* Inside a band the surface is still the surface - buttons do not turn
+   translucent and give up their own contrast. */
+.cropbar .tbtn { background: var(--surface); border-color: var(--edge); color: var(--text); }
+.cropbar .tbtn:hover { background: var(--surface-2); }
+.cropbar .tbtn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+.cropbar .tbtn.ghost:hover { background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); }
 
-.annotbar {
-  display: flex; align-items: center; gap: 13px; flex-wrap: wrap; padding: 9px 18px;
-  background: var(--panel); border-bottom: 1px solid var(--border);
-  position: sticky; top: 57px; z-index: 19; box-shadow: var(--shadow-sm);
-  animation: slidedown .16s ease;
+/* ============================ Work row ============================
+   Toolbar on top, then: tool rail | stage | properties panel. */
+.work { flex: 1; display: flex; min-height: 0; }
+
+/* ============================ Annotate ============================
+   Eleven tools used to share one wrapping horizontal bar with four stamps,
+   eight colours, a size slider and four buttons - 28 controls in a row that
+   re-wrapped every time you selected a shape. That became a rail plus a 240px
+   panel, which fixed the wrapping but cost 280px of STAGE WIDTH - and because
+   fitScale() is width-only, that is 15% of zoom on a tall capture, i.e. the
+   difference between reading the text you are annotating and squinting at it.
+   So: the rail keeps every tool at a permanent address, and the properties of
+   the CURRENT tool live in a 40px strip. Height is the cheap currency here -
+   a tall capture scrolls anyway; width decides the zoom. */
+
+/* The rail is always in the flow, so .stage never changes width and entering
+   annotate mode rescales nothing. `visibility`, never `hidden` - result.css
+   makes [hidden] `display: none !important`, which would collapse the gutter
+   and bring the whole shrink back. */
+.arail {
+  flex: 0 0 auto; width: 46px;
+  background: var(--surface); border-right: 1px solid var(--rule);
+  padding: 6px 0; display: flex; flex-direction: column; align-items: center;
+  overflow-y: auto; scrollbar-width: thin;
 }
-.annotbar .spacer { flex: 1; }
-.atools { display: flex; gap: 5px; padding: 3px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; }
+.work:not(.annot) .arail { visibility: hidden; border-right-color: transparent; }
+body:has(#stage[hidden]) .arail { display: none; }
+.atools { display: flex; flex-direction: column; gap: 2px; }
 .atool {
   width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center;
-  border: 0; border-radius: 7px; background: transparent; color: var(--text); cursor: pointer;
-  transition: background .12s, transform .1s, color .12s;
+  border: 0; border-radius: var(--r1); background: transparent; color: var(--muted); cursor: pointer;
+  transition: background .12s, color .12s;
 }
-.atool:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.atool:active { transform: scale(.92); }
-.atool svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.atool.active { background: var(--accent-grad); color: #fff; box-shadow: 0 3px 10px var(--ring); }
-.astamps { display: flex; gap: 5px; align-items: center; }
-.astamp { border: 0; border-radius: 6px; padding: 6px 9px; font: 800 10.5px/1 system-ui, "Segoe UI", Arial, sans-serif;
-  color: #fff; cursor: pointer; opacity: .82; letter-spacing: .3px; transition: opacity .12s, box-shadow .12s, transform .1s; }
-.astamp:hover { opacity: 1; }
-.astamp:active { transform: scale(.94); }
-.astamp.active { opacity: 1; box-shadow: 0 0 0 2px rgba(255,255,255,.6), 0 3px 10px rgba(0,0,0,.25); }
-.astamp.bug { background: #e11d48; }
-.astamp.pass { background: #16a34a; }
-.astamp.fixed { background: #d97706; }
-.astamp.retest { background: #2563eb; }
-.acolors { display: flex; gap: 7px; align-items: center; }
+.atool:hover { background: var(--surface-2); color: var(--text); }
+.atool svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.333; stroke-linecap: round; stroke-linejoin: round; }
+.atool.active { background: var(--accent); color: var(--on-accent); }
+.rdiv { width: 20px; height: 1px; margin: 5px 0; background: var(--rule); flex: 0 0 auto; }
+
+/* The strip. Same band language as .cropbar - both are "you are inside a
+   mode", and they used to be two unrelated designs for the same slot. */
+.astrip {
+  flex: 0 0 46px; height: 46px;
+  display: flex; align-items: center; gap: 12px; padding: 0 14px;
+  /* nowrap is the load-bearing half - it is what stops this becoming the
+     wrapping bar it replaces. The overflow scrolls rather than clipping, so
+     a narrow window loses reach, never the Done button itself. */
+  flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+  background: var(--surface); color: var(--text);
+  border-bottom: 1px solid var(--rule);
+  box-shadow: inset 3px 0 0 var(--accent);
+  animation: slidedown .16s ease;
+}
+.astrip::-webkit-scrollbar { display: none; }
+/* Fixed, not min-width: a name that grows drags every control after it
+   sideways, so clicking one stamp chip moved the other three under the
+   cursor. */
+.atoolname { flex: 0 0 auto; width: 88px; font-size: 14px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.astrip .spacer { flex: 1; }
+.astrip .tbtn { background: var(--surface); border-color: var(--edge); color: var(--text); }
+.astrip .tbtn:hover { background: var(--surface-2); }
+
+/* Colour and stamps swap in place. The slot holds the width of the WIDER of
+   the two, so swapping tools never slides its neighbours along the strip. */
+/* Always reserved, even when empty: this slot swaps colour for stamps and
+   empties for blur, and anything that resizes drags the whole strip. */
+.aslot { flex: 0 0 auto; min-width: 292px; display: flex; align-items: center; }
+.aslot-in { display: flex; align-items: center; gap: 8px; }
+
+/* result.js fills #acolors with seven swatches; display:contents lets them and
+   the custom picker share one row. The ring is what makes #FFFFFF and #12151A
+   - both in the palette - visible on any surface. */
+.aswatches { display: flex; align-items: center; gap: 6px; }
+.acolors { display: contents; }
 .swatch {
-  width: 22px; height: 22px; border-radius: 50%; cursor: pointer; padding: 0;
-  border: 2px solid rgba(128,128,128,.3); transition: transform .1s, box-shadow .12s;
+  width: 26px; height: 26px; padding: 0; border-radius: 4px; cursor: pointer;
+  border: 0; box-shadow: inset 0 0 0 1px rgba(18, 21, 26, .18); flex: 0 0 auto;
 }
-.swatch:hover { transform: scale(1.12); }
-.swatch.active { transform: scale(1.12); box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--accent); }
-.acustom { width: 26px; height: 26px; padding: 0; border: 2px solid rgba(128,128,128,.3); border-radius: 50%; cursor: pointer; background: none; }
+.swatch.active { outline: 2px solid var(--text); outline-offset: 1px; }
+/* The palette contains both #FFFFFF and #12151A, so ONE ring colour cannot
+   show them both. Measured: black-on-dark-strip was 1.04:1 - invisible.
+   Flip the ring with the theme instead. */
+@media (prefers-color-scheme: dark) {
+  .swatch, .acustom { box-shadow: inset 0 0 0 1px rgba(230, 233, 236, .38); }
+}
+.swatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.acustom { width: 26px; height: 26px; padding: 0; border: 0; box-shadow: inset 0 0 0 1px rgba(18, 21, 26, .18); border-radius: 4px; cursor: pointer; background: none; flex: 0 0 auto; }
+/* It sat 6px from swatch #1 at the same 26px size and the same default colour, so the
+   row ended in two identical reds with nothing to say which one opens a picker.
+   Generated content is not an option here - Chrome does not paint ::before/::after on
+   an <input> - so the distinction is carried by SHAPE: a round chip inside a spectrum
+   ring, which is what "pick any colour" looks like everywhere else. */
+.acustom {
+  margin-left: 8px;
+  border-radius: 50%;
+  padding: 3px;                 /* lets the ring show around the chosen colour */
+  background: conic-gradient(#e11d48, #f59e0b, #22c55e, #06b6d4, #3b82f6, #a855f7, #e11d48);
+  box-shadow: none;
+}
 .acustom::-webkit-color-swatch-wrapper { padding: 0; }
 .acustom::-webkit-color-swatch { border: none; border-radius: 50%; }
-.awidth { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); font-weight: 600; }
-.awidth input { width: 108px; }
-.ahint { font: 700 11px/1 -apple-system, system-ui, "Segoe UI", Arial, sans-serif; color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent); padding: 5px 9px; border-radius: 6px; white-space: nowrap; }
-.awidth .awval { min-width: 26px; text-align: right; font: 700 11.5px/1 ui-monospace, monospace; color: var(--text); }
+
+.awidth { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); font-weight: 500; }
+.awidth input { width: 132px; flex: none; }
+.awidth .awval { min-width: 32px; text-align: right; font-size: 12.5px; font-weight: 600; color: var(--text); }
+
+/* QA stamps.
+   White labels on four saturated fills - 2.56:1 to 3.86:1, made worse by
+   opacity .82 at rest - and the ARMED state was a white ring on a white bar,
+   i.e. 1.00:1: you could not see which stamp was loaded. They are ink-on-
+   surface cells with a colour dot now, and armed is the same accent fill every
+   other mode control uses. */
+.astamps { display: flex; align-items: center; gap: 4px; }
+.astamp {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 30px; padding: 0 9px; flex: 0 0 auto;
+  border: 1px solid var(--edge); border-radius: 4px;
+  background: var(--surface); color: var(--text);
+  font-family: inherit; font-size: 11px; font-weight: 600; line-height: 1; letter-spacing: .06em;
+  cursor: pointer; transition: background .12s, color .12s;
+}
+.astamp::before { content: ""; width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+.astamp:hover { background: var(--surface-2); }
+.astamp.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+/* The dot keeps its colour when armed - these are the inks result.js draws on
+   the canvas (result.js:74-77); the cell only quotes them. */
+.astamp.bug::before    { background: #D0264A; }
+.astamp.pass::before   { background: #0F7A42; }
+.astamp.fixed::before  { background: #9A6700; }
+.astamp.retest::before { background: #1D5FD6; }
+
+/* Undo / Redo / Clear are the only way back from a mistake, so they must never
+   be what scrolls away. Measured before this rule: the strip overflows at 760px
+   and Clear leaves it - and scrollbar-width:none means nothing hints it is there.
+   Pinned right, the middle of the strip scrolls underneath instead. */
+.arow {
+  display: flex; gap: 4px; flex: 0 0 auto;
+  position: sticky; right: 0;
+  background: var(--surface);
+  padding-left: 10px; margin-right: -14px; padding-right: 14px;
+  box-shadow: -12px 0 12px -10px rgba(18, 21, 26, .22);
+}
+.arow .tbtn { flex: none; justify-content: center; padding: 0 9px; }
+/* Clear removes every annotation and does not ask. It should look like it. */
+#aclear, #aclear:hover { color: var(--danger); border-color: var(--danger); }
+
+/* Must truncate, never wrap: this is the control whose appearing and
+   disappearing re-wrapped the old bar mid-edit. */
+.ahint { flex: 0 1 auto; min-width: 0; font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 
 /* ============================ Stage ============================ */
-.stage { flex: 1; overflow: auto; padding: 34px; display: flex; justify-content: center; align-items: flex-start; }
+/* `safe` centring: once the image is zoomed wider than the stage, plain
+   `center` puts the left edge outside the scroll origin and it cannot be
+   reached at all. */
+.stage { order: 2; flex: 1; min-width: 0; overflow: auto; padding: 18px; display: flex; justify-content: safe center; align-items: flex-start; }
 .canvas-host {
-  position: relative; line-height: 0; border-radius: 8px;
-  background-color: var(--panel);
-  background-image:
-    linear-gradient(45deg, var(--checker) 25%, transparent 25%),
-    linear-gradient(-45deg, var(--checker) 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, var(--checker) 75%),
-    linear-gradient(-45deg, transparent 75%, var(--checker) 75%);
-  background-size: 20px 20px;
-  background-position: 0 0, 0 10px, 10px -10px, -10px 0;
-  box-shadow: var(--shadow-lg), 0 0 0 1px rgba(0,0,0,.05);
-  animation: rise .25s cubic-bezier(.2,.7,.3,1);
+  position: relative; line-height: 0;
+  background-color: var(--surface);
+  /* No checkerboard. A screenshot is an opaque rectangle; a transparency
+     pattern behind it only ever showed through as noise at the edges. */
+  border: 1px solid var(--edge);
+  animation: rise .2s cubic-bezier(.2,.7,.3,1);
 }
-@keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 .canvas-host canvas { display: block; max-width: none; }
 .canvas-host canvas.annot-layer { position: absolute; left: 0; top: 0; pointer-events: none; }
 .canvas-host.annotating canvas.annot-layer { pointer-events: auto; cursor: crosshair; }
 
-.crop-overlay { position: absolute; inset: 0; cursor: crosshair; background: rgba(2, 6, 23, .4); z-index: 5; }
-.crop-rect { position: absolute; border: 2px solid #fff; box-shadow: 0 0 0 9999px rgba(2, 6, 23, .5); background: transparent; }
+/* ONE scrim. There used to be two stacked - a wash over the whole overlay plus
+   the rect's own 9999px spread - so the region you were choosing was judged
+   through a dimmed preview of itself. The kept region is at full fidelity now. */
+.crop-overlay { position: absolute; inset: 0; cursor: crosshair; background: transparent; z-index: 5; }
+.crop-rect { position: absolute; border: 1px solid #fff; outline: 1px solid rgba(2, 6, 23, .55); box-shadow: 0 0 0 9999px rgba(2, 6, 23, .55); background: transparent; }
 .annot-text-input {
   position: absolute; z-index: 200; background: rgba(255,255,255,.92); color: #111;
-  border: 0; padding: 0 1px; line-height: 1.1; border-radius: 3px;
+  border: 0; padding: 0 1px; line-height: 1.1; border-radius: 2px;
   outline: 2px solid var(--accent); outline-offset: 0;
   font-family: system-ui, "Segoe UI", Arial, sans-serif; min-width: 40px;
 }
 
 /* ============================ Progress / Error ============================ */
-.progress-wrap, .error-wrap { flex: 1; display: flex; align-items: center; justify-content: center; padding: 34px; }
+.progress-wrap, .error-wrap { order: 2; flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; padding: 34px; }
 .progress-card, .error-card {
-  background: var(--panel); border: 1px solid var(--border); border-radius: 18px;
-  padding: 38px 44px; text-align: center; min-width: 340px; box-shadow: var(--shadow-lg);
-  animation: rise .25s cubic-bezier(.2,.7,.3,1);
+  background: var(--surface); border: 1px solid var(--rule); border-radius: var(--r2);
+  padding: 32px 40px; min-width: 340px; box-shadow: var(--pop);
+  animation: rise .2s cubic-bezier(.2,.7,.3,1);
 }
-.spinner {
-  width: 46px; height: 46px; margin: 0 auto 20px; border-radius: 50%;
-  background: conic-gradient(from 0deg, transparent 0%, var(--accent) 85%, var(--accent-2));
-  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 4px));
-  mask: radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 4px));
-  animation: spin .8s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-.progress-title { font-weight: 750; font-size: 16px; margin-bottom: 18px; letter-spacing: .2px; }
-.progress-bar { height: 8px; background: color-mix(in srgb, var(--muted) 20%, transparent); border-radius: 999px; overflow: hidden; }
-.progress-fill { height: 100%; width: 0; border-radius: 999px; background: var(--accent-grad); background-size: 200% 100%; transition: width .25s ease; animation: shimmer 1.4s linear infinite; }
-@keyframes shimmer { to { background-position: -200% 0; } }
-.progress-sub { margin-top: 12px; color: var(--muted); font-size: 12.5px; }
+/* The card's job is to communicate ONE quantity: how far along this is. That
+   quantity - "Section 3 of 12" - used to be last, smallest and faintest, under
+   a spinner, a shimmer and a width transition all running at once. It is the
+   headline now, the verb above it is the caption, and the bar is the only
+   thing that moves. */
+.progress-card { display: flex; flex-direction: column; align-items: center; text-align: center; }
+.spinner { display: none; }
+.progress-sub { order: 1; font-size: 22px; font-weight: 600; color: var(--text); letter-spacing: -.2px; font-variant-numeric: tabular-nums; }
+.progress-title { order: 2; margin-top: 6px; margin-bottom: 18px; font-size: 13px; font-weight: 400; color: var(--muted); }
+.progress-bar { order: 3; width: 100%; height: 8px; background: var(--surface-3); border-radius: var(--r1); overflow: hidden; }
+.progress-fill { height: 100%; width: 0; border-radius: var(--r1); background: var(--accent); transition: width .25s ease; }
 
-.error-icon { font-size: 42px; margin-bottom: 12px; }
-.error-title { font-weight: 750; font-size: 17px; margin-bottom: 8px; }
+/* The failure card used to be the loading card with different words in it, and
+   its biggest object was a 42px OS emoji in a product that draws its own icons.
+   A danger rule down the left changes the silhouette, so the two states are
+   told apart before either is read. */
+.error-card { text-align: left; border-left: 3px solid var(--danger); max-width: 520px; }
+.error-icon { width: 28px; height: 28px; margin-bottom: 12px; color: var(--danger); }
+.error-icon svg { width: 28px; height: 28px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.error-title { font-weight: 600; font-size: 16px; margin-bottom: 6px; }
 .error-msg { color: var(--muted); max-width: 440px; line-height: 1.55; }
 
 /* ============================ Toast ============================ */
 .toast {
-  position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%) translateY(8px);
-  background: color-mix(in srgb, #0f172a 92%, transparent); color: #fff;
-  padding: 12px 20px; border-radius: 12px; font-size: 13px; font-weight: 650; z-index: 100;
-  box-shadow: var(--shadow-lg); border: 1px solid rgba(255,255,255,.08);
-  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
-  opacity: 0; transition: opacity .22s ease, transform .22s cubic-bezier(.2,.8,.3,1);
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(8px);
+  /* inverted: ink in light, surface in dark - so it separates from the page in
+     BOTH themes. The old near-black pill was nearly invisible on a dark page. */
+  background: var(--text); color: var(--surface);
+  padding: 11px 18px; border-radius: var(--r2); font-size: 13px; font-weight: 500; z-index: 100;
+  max-width: 460px; text-align: left; box-shadow: var(--pop);
+  opacity: 0; transition: opacity .2s ease, transform .2s cubic-bezier(.2,.8,.3,1);
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
@@ -322,36 +489,157 @@ input[type="range"] { accent-color: var(--accent); }
 }
 
 /* ---- Recent captures ---- */
-.recentbtn { margin-left: auto; }
-.recentbtn.on { background: var(--panel-2); color: var(--text); }
-/* Anchored under the Recent button, with a caret so it reads as belonging to it. */
-.recent { position: fixed; right: 16px; top: 54px; z-index: 60; width: 358px; max-height: 70vh; overflow: auto;
-  background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
-  box-shadow: 0 18px 44px rgba(16, 24, 40, .18), 0 2px 8px rgba(16, 24, 40, .10); padding: 10px;
+
+.recentwrap { position: relative; flex: 0 0 auto; }
+.recent { position: absolute; left: 0; top: calc(100% + 8px); z-index: 60; width: 358px; max-height: 70vh; overflow: auto;
+  background: var(--surface); border: 1px solid var(--edge); border-radius: var(--r2);
+  box-shadow: var(--pop); padding: 8px;
   animation: recentIn .13s ease-out; transform-origin: top right; }
-@keyframes recentIn { from { opacity: 0; transform: translateY(-6px) scale(.97); } to { opacity: 1; transform: none; } }
+@keyframes recentIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 .recent::before {                      /* caret pointing at the Recent button */
-  content: ""; position: absolute; top: -7px; right: 26px; width: 12px; height: 12px;
-  background: var(--panel); border-left: 1px solid var(--border); border-top: 1px solid var(--border);
-  transform: rotate(45deg); border-radius: 2px 0 0 0; }
+  content: ""; position: absolute; top: -6px; left: 26px; width: 10px; height: 10px;
+  background: var(--surface); border-left: 1px solid var(--edge); border-top: 1px solid var(--edge);
+  transform: rotate(45deg); }
 .recent-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 4px 6px 8px; }
-.recent h4 { margin: 0; font-size: 13px; font-weight: 800; }
-.recent-count { font-size: 11px; color: var(--muted); font-weight: 600; }
-.recent-item { display: flex; gap: 10px; align-items: center; padding: 8px; border-radius: 10px; cursor: pointer;
+.recent h4 { margin: 0; font-size: 13px; font-weight: 600; }
+.recent-count { font-size: 12px; color: var(--muted); font-weight: 500; }
+.recent-item { display: flex; gap: 10px; align-items: center; padding: 8px; border-radius: var(--r1); cursor: pointer;
   border: 1px solid transparent; transition: background .12s, border-color .12s; }
-.recent-item:hover, .recent-item:focus-visible { background: var(--panel-2);
-  border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); outline: none; }
-.recent-open { flex: 0 0 auto; font-size: 11px; font-weight: 800; color: var(--accent);
+.recent-item:hover { background: var(--surface-2); border-color: var(--rule); }
+/* focus is not hover: openRecent() moves focus here, and deleting the ring
+   left the keyboard user with no idea where they were. */
+.recent-item:focus-visible { background: var(--surface-2); outline: 2px solid var(--accent); outline-offset: -2px; }
+.recent-open { flex: 0 0 auto; font-size: 12px; font-weight: 600; color: var(--accent);
   opacity: 0; transition: opacity .12s; white-space: nowrap; }
 .recent-item:hover .recent-open, .recent-item:focus-visible .recent-open { opacity: 1; }
-.recent-item img { width: 76px; height: 56px; object-fit: cover; object-position: top; border-radius: 6px;
-  border: 1px solid var(--border); background: #fff; flex: 0 0 auto; }
+.recent-item img { width: 76px; height: 56px; object-fit: cover; object-position: top; border-radius: var(--r1);
+  border: 1px solid var(--rule); background: #fff; flex: 0 0 auto; }
 .recent-txt { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
-.recent-txt b { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.recent-txt span { font-size: 11px; color: var(--muted); }
+.recent-txt b { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.recent-txt span { font-size: 12px; color: var(--muted); }
 /* The remove button stays out of the way until you are actually on the row. */
 .recent-del { border: 0; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer;
-  padding: 2px 7px; border-radius: 6px; flex: 0 0 auto; opacity: 0; transition: opacity .12s, background .12s, color .12s; }
+  padding: 2px 7px; border-radius: var(--r1); flex: 0 0 auto; opacity: 0; transition: opacity .12s, background .12s, color .12s; }
 .recent-item:hover .recent-del, .recent-item:focus-visible .recent-del, .recent-del:focus-visible { opacity: 1; }
-.recent-del:hover { background: rgba(225,29,72,.12); color: #e11d48; }
-.recent-empty { font-size: 12.5px; color: var(--muted); padding: 10px; line-height: 1.5; }
+.recent-del:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
+.recent-empty { font-size: 13px; color: var(--muted); padding: 10px; line-height: 1.5; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+}
+
+/* Print and URL-bar are one-off actions you either know or never touch, so
+   they drop to icons and give the row back ~90px - which is what stops the
+   toolbar wrapping at ordinary window widths. Both keep their title tooltip.
+   Copy, Send to Drive and Download keep their labels: those are the three
+   things a bug-report run actually ends with. */
+#print span, #infobar span { display: none; }
+
+/* In the panel these are cells, not toolbar ghosts - Clear especially, which
+   removes every annotation and does not ask first. */
+.arow .tbtn.ghost { border-color: var(--edge); color: var(--text); }
+.arow .tbtn.ghost:hover { background: var(--surface-2); }
+
+/* Apply crop is the primary action of the crop mode, the same way Done is for
+   annotate - so it takes the accent fill, and nothing else in the band does. */
+#cropApply { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+#cropApply:hover { background: color-mix(in srgb, var(--accent) 88%, var(--text)); }
+
+/* A bordered group: one edge around several cells, hairlines between them -
+   so five buttons cost one boundary instead of five. */
+.grp { display: inline-flex; border: 1px solid var(--edge); border-radius: var(--r1); overflow: hidden; }
+.grp .tbtn.cell {
+  border: 0; border-right: 1px solid var(--rule); border-radius: 0;
+  width: 32px; height: 32px; padding: 0; background: transparent; color: var(--muted);
+}
+.grp .tbtn.cell:last-child { border-right: 0; }
+.grp .tbtn.cell:hover { background: var(--surface-2); color: var(--text); }
+.grp .tbtn.cell:active { background: var(--surface-3); }
+.grp .tbtn.cell:focus-visible { outline-offset: -3px; }
+
+
+/* Two toggles live inside containers whose rules are more specific than
+   .tbtn.on, so their ON state was rendering as no change at all: #infobar
+   inside a .grp, and #recentBtn as a .ghost. Both take the accent wash the
+   spec uses for "this is currently on" - a fill would be a third solid accent
+   on screen beside Download. */
+.grp .tbtn.cell.on,
+.tbtn.ghost.on { background: var(--accent-wash); color: var(--accent); }
+.grp .tbtn.cell.on:hover,
+.tbtn.ghost.on:hover { background: color-mix(in srgb, var(--accent) 16%, var(--surface)); }
+.grp .tbtn.cell.on:active,
+.tbtn.ghost.on:active { background: color-mix(in srgb, var(--accent) 24%, var(--surface)); }
+
+/* The size slider is ink on grey with a square handle. A native range picks up
+   accent-color, which would put the teal on screen a third time - and the
+   accent means "primary action" here, not "a value". */
+input[type="range"] {
+  -webkit-appearance: none; appearance: none;
+  --fill: .5;                       /* 0..1, set by JS */
+  height: 20px; background: transparent; cursor: pointer;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px; border-radius: 4px;
+  background: linear-gradient(to right,
+    var(--text) 0 calc(5px + (100% - 10px) * var(--fill)),
+    var(--surface-3) calc(5px + (100% - 10px) * var(--fill)) 100%);
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; margin-top: -3px;
+  width: 10px; height: 10px; border-radius: 2px; border: 0; background: var(--text);
+  /* without this the handle is the same ink as the fill it sits on - 1:1 */
+  box-shadow: 0 0 0 2px var(--surface);
+  cursor: pointer;
+}
+input[type="range"]::-moz-range-track { height: 4px; border-radius: 4px; background: var(--surface-3); }
+input[type="range"]::-moz-range-progress { height: 4px; border-radius: 4px; background: var(--text); }
+input[type="range"]::-moz-range-thumb {
+  width: 10px; height: 10px; border-radius: 2px; border: 0; background: var(--text);
+  box-shadow: 0 0 0 2px var(--surface); cursor: pointer;
+}
+
+/* The captured page, named where the wordmark used to be. */
+.btitle {
+  font-size: 13px; font-weight: 600; letter-spacing: -.1px; color: var(--text);
+  max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Status bar: what the export will be. Shown only once there is a capture -
+   :has() keeps that tied to the stage instead of another JS-managed flag. */
+.statusbar {
+  display: none; align-items: center; gap: 12px; height: 26px; padding: 0 14px;
+  background: var(--surface); border-top: 1px solid var(--rule); color: var(--muted);
+  font-family: ui-monospace, "Cascadia Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px; font-weight: 500; line-height: 16px;
+  font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden;
+}
+body:has(#stage:not([hidden])) .statusbar { display: flex; }
+.statusbar .sep { color: var(--rule); }
+.statusbar .spacer { flex: 1; }
+.statusbar .stmsg { color: var(--accent); overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- state fixes -------------------------------------------------------
+   Five places where a more specific rule was quietly winning over a state
+   rule, so the state rendered as no change at all. Each is pinned at or above
+   the specificity of the rule that was beating it. */
+
+
+/* Send to Drive and Copy link had no press feedback at all, because their own
+   background rule outranked .tbtn:active. */
+.tbtn.drive:active,
+.tbtn.copylink:active { background: var(--surface-3); }
+
+/* A disabled cell inside a group still lit up on hover, and the shared
+   disabled recipe never reached it. #infobar is genuinely disabled on a
+   multi-part or cropped image. */
+.grp .tbtn.cell:disabled { color: var(--muted); background: transparent; cursor: default; }
+.grp .tbtn.cell:disabled:hover { background: transparent; color: var(--muted); }
+
+/* A disabled ghost was GAINING a border - #recentBtn ships disabled, so it
+   rendered as a bordered pill during the whole capture, louder than enabled. */
+.tbtn.ghost:disabled,
+.tbtn.ghost:disabled:hover { background: transparent; border-color: transparent; color: var(--muted); }
+
+
+/* A native range has no filled portion; the design's track is ink up to the
+   handle. result.js keeps --fill in step with the value. */

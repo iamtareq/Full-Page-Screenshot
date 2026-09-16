@@ -1,143 +1,208 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
+  <title>Full Page Capture</title>
   <style>
+    /* ============================ Design tokens ============================
+       ONE set, shared with result.css and options.html. Two ink tiers, two
+       border weights, two radii, one accent. Every value here was picked
+       against a measured contrast ratio - the numbers are in the comments so
+       the next person does not have to re-derive them.
+
+       The tier that used to be called --faint (#98a2b3) is GONE. It carried
+       every description in this popup at 2.58:1, which is below the 4.5:1 AA
+       floor for body text; --muted replaces it at 5.98:1. There is deliberately
+       no third, fainter tier for text to drift back into. */
     :root {
       color-scheme: light dark;
-      --surface: #ffffff;
-      --surface-2: #f7f8fa;
-      --border: #e4e7ec;
-      --border-strong: #d3d8e0;
-      --text: #101828;
-      --muted: #667085;
-      --faint: #98a2b3;
-      --accent: #0d9488;
-      --accent-soft: #f0fdfa;
-      --accent-line: #99f6e4;
+
+      --surface:   #ffffff;   /* the popup itself */
+      --surface-2: #edeff2;   /* the one hover fill, for every control family */
+      --surface-3: #e3e6ea;   /* the one press fill */
+
+      /* Two border weights with two different jobs. --rule divides things that
+         are already inside a box; --edge bounds anything you can press, and is
+         the only one that has to clear WCAG 1.4.11. The old single hairline
+         (#e4e7ec) was 1.24:1 and was doing both jobs badly. */
+      --rule: #e4e7eb;        /* 1.15:1 on white - decorative, divides only */
+      --edge: #8d95a1;        /* 3.02:1 on white - bounds anything interactive */
+
+      --text:  #12151a;       /* 18.29:1 */
+      --muted: #5b6472;       /* 5.98:1 on white, 5.19:1 on --surface-2, 5.29:1 on the wash */
+
+      --accent:      #0f766e; /* 5.47:1 as ink on white, and under white as a fill */
+      --accent-wash: #e9f3f1; /* the one "selected / current / notice" ground */
+      --accent-line: #a7cdc8; /* its border */
+
+      /* The ink that sits ON an accent fill. Light and dark disagree, and that
+         disagreement is the whole reason white-on-teal shipped at 3.74:1 here
+         for so long - so it is a token now, not a rule to remember. */
+      --on-accent: #ffffff;   /* 5.47:1 on #0f766e */
+
+      --r1: 4px;              /* controls, chips, segments */
+      --r2: 6px;              /* rows, cards, the banner */
     }
     @media (prefers-color-scheme: dark) {
       :root {
-        --surface: #14181f; --surface-2: #1b2029; --border: #262d38; --border-strong: #333b48;
-        --text: #e7eaee; --muted: #98a2b3; --faint: #77818f;
-        --accent: #2dd4bf; --accent-soft: #10231f; --accent-line: #17544c;
+        --surface:   #16191d;
+        --surface-2: #1d2126;
+        --surface-3: #242a31;
+        --rule: #262b31;
+        --edge: #646b75;      /* 3.28:1 on --surface */
+        --text:  #e6e9ec;     /* 14.47:1 */
+        --muted: #9ba3ae;     /* 6.92:1 on --surface, 6.43:1 on the wash */
+        --accent:      #2dd4bf;
+        --accent-wash: #10231f;
+        --accent-line: #17544c;
+        --on-accent:   #04211f; /* 9.08:1 on #2dd4bf - white here would be 1.86:1 */
       }
     }
+
     * { box-sizing: border-box; }
     [hidden] { display: none !important; }
     body {
       width: 304px; margin: 0; background: var(--surface); color: var(--text);
-      font: 13px/1.45 -apple-system, system-ui, "Segoe UI", Roboto, Arial, sans-serif;
+      font: 13px/1.45 -apple-system, "Segoe UI Variable Text", "Segoe UI", system-ui, Roboto, Arial, sans-serif;
       -webkit-font-smoothing: antialiased;
+    }
+    /* Every number in the product is set in the mono stack with tabular figures,
+       so a value can never change width as it updates. */
+    .ver, .kbd, .more-n {
+      font: 500 10.5px/16px ui-monospace, "Cascadia Mono", SFMono-Regular, Menlo, Consolas, monospace;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ONE focus rule for the whole surface, expressed as `outline` rather than
+       `box-shadow`. That is deliberate: a later rule setting box-shadow (a hover
+       lift, an active fill) silently cancels a box-shadow ring, which is exactly
+       how the segmented control, the update button and the footer links ended up
+       with no focus indicator at all. An outline cannot be cancelled that way. */
+    :where(button, a, [tabindex]):focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
     }
 
     /* header: a quiet identity strip, not a coloured band */
     header {
       display: flex; align-items: center; gap: 10px;
-      padding: 13px 14px 12px; border-bottom: 1px solid var(--border);
+      padding: 13px 14px 12px; border-bottom: 1px solid var(--rule);
     }
-    header img { width: 26px; height: 26px; border-radius: 7px; flex: 0 0 auto; }
-    header h1 { font-size: 13.5px; font-weight: 650; margin: 0; letter-spacing: -.1px; }
-    header .tag { display: block; font-size: 11px; color: var(--faint); font-weight: 400; margin-top: 1px; }
+    header img { width: 26px; height: 26px; border-radius: var(--r2); flex: 0 0 auto; }
+    header h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -.2px; }
+    header .tag { display: block; font-size: 12px; color: var(--muted); font-weight: 400; margin-top: 1px; }
     header .ver {
-      margin-left: auto; flex: 0 0 auto; font: 500 10.5px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
-      color: var(--faint); background: var(--surface-2); border: 1px solid var(--border);
-      padding: 4px 6px; border-radius: 5px;
+      margin-left: auto; flex: 0 0 auto; color: var(--muted);
+      background: var(--surface-2); border: 1px solid var(--rule);
+      padding: 3px 6px; border-radius: var(--r1);
     }
 
     .body { padding: 10px; display: flex; flex-direction: column; gap: 6px; }
 
-    /* capture rows: flat, hairline, a single accent */
+    /* capture rows.
+       These used to be white on white, bounded by a 1.24:1 hairline - so the one
+       thing telling you they were pressable was invisible. They are bounded by
+       --edge now (3.02:1), which is what WCAG 1.4.11 asks of a component
+       boundary that carries no other affordance. */
     .btn {
       display: flex; align-items: center; gap: 11px; width: 100%; padding: 9px 10px; text-align: left;
-      border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
+      border: 1px solid var(--edge); border-radius: var(--r2); background: var(--surface);
       color: var(--text); cursor: pointer;
-      transition: background .13s ease, border-color .13s ease;
+      transition: background .12s ease, border-color .12s ease;
     }
-    .btn:hover { background: var(--surface-2); border-color: var(--border-strong); }
-    .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-    .btn:active { background: var(--accent-soft); border-color: var(--accent-line); }
+    .btn:hover { background: var(--surface-2); }
+    /* Press is its own fill, not the accent wash. Sharing --accent-soft between
+       "pressed" and "there is an update" is what made the banner read as a
+       stuck button; the wash means exactly one thing now. */
+    .btn:active { background: var(--surface-3); }
 
     .chip {
-      flex: 0 0 auto; width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center;
-      background: var(--surface-2); border: 1px solid var(--border); color: var(--muted);
+      flex: 0 0 auto; width: 32px; height: 32px; border-radius: var(--r1); display: grid; place-items: center;
+      background: var(--surface-2); border: 1px solid var(--rule); color: var(--muted);
     }
     /* only the primary action carries the accent */
-    .btn.primary .chip { background: var(--accent); border-color: transparent; color: #fff; }
-    .btn.primary:hover .chip { filter: brightness(1.06); }
-    .chip svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .btn.primary { border-color: var(--accent); }
+    .btn.primary .chip { background: var(--accent); border-color: transparent; color: var(--on-accent); }
+    /* Icons render a 1.0px line at every size: stroke-width = 24 / rendered px.
+       The four rules in this file used to land on 0.975, 0.99, 1.19 and 1.275px,
+       so no two glyphs in the popup had the same line quality. */
+    .chip svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.2; stroke-linecap: round; stroke-linejoin: round; }
 
     .txt { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
-    .txt b { font-size: 12.5px; font-weight: 600; letter-spacing: -.1px; }
-    .txt span { font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .txt b { font-size: 13px; font-weight: 500; letter-spacing: -.1px; }
+    .btn.primary .txt b { font-weight: 600; }
+    .txt span { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .kbd {
-      margin-left: auto; flex: 0 0 auto; font: 500 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
-      color: var(--faint); background: var(--surface-2); border: 1px solid var(--border);
-      padding: 4px 6px; border-radius: 5px; white-space: nowrap;
+      margin-left: auto; flex: 0 0 auto; color: var(--muted);
+      background: var(--surface-2); border: 1px solid var(--rule);
+      padding: 3px 5px; border-radius: var(--r1); white-space: nowrap;
     }
-    .btn:hover .kbd { color: var(--muted); }
 
     /* delay */
     .timer { display: flex; align-items: center; gap: 8px; padding: 4px 2px 0; }
-    .timer .tlabel { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--faint); }
-    .timer .ticon { width: 13px; height: 13px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-    .seg { display: flex; gap: 2px; margin-left: auto; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 2px; }
+    .timer .tlabel { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
+    .timer .ticon { width: 13px; height: 13px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.846; stroke-linecap: round; stroke-linejoin: round; }
+    .seg { display: flex; margin-left: auto; border: 1px solid var(--edge); border-radius: var(--r1); overflow: hidden; }
     .seg button {
-      border: 0; background: transparent; color: var(--muted); cursor: pointer;
-      font: 500 11px/1 -apple-system, system-ui, sans-serif; padding: 6px 11px; border-radius: 6px;
-      transition: background .13s, color .13s;
+      border: 0; border-right: 1px solid var(--rule); background: var(--surface); color: var(--muted); cursor: pointer;
+      font-family: inherit; font-size: 11.5px; font-weight: 500; line-height: 1; padding: 6px 9px;
+      transition: background .12s, color .12s;
     }
-    .seg button:hover { color: var(--text); }
-    .seg button.active { background: var(--accent); color: #fff; font-weight: 600; }
+    .seg button:last-child { border-right: 0; }
+    .seg button:hover { background: var(--surface-2); color: var(--text); }
+    .seg button.active { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+    /* inset, so the ring is not clipped by the group's overflow */
+    .seg button:focus-visible { outline-offset: -3px; }
+    /* the selected segment IS the accent, so its ring has to be the ink */
+    .seg button.active:focus-visible { outline-color: var(--on-accent); }
 
     /* update: informative, not a warning */
     .update {
       display: none; align-items: center; gap: 10px; padding: 9px 10px 9px 11px;
-      border: 1px solid var(--accent-line); border-radius: 10px; background: var(--accent-soft);
+      border: 1px solid var(--accent-line); border-radius: var(--r2); background: var(--accent-wash);
     }
     .update.show { display: flex; }
     .update .udot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
     .update .ucol { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
-    .update b { font-size: 12px; font-weight: 600; color: var(--text); }
-    .update .h { font-size: 10.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
-    .update code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
+    .update b { font-size: 13px; font-weight: 600; color: var(--text); }
+    /* Two lines, then clip. The old single-line ellipsis never fired: the rule
+       set overflow + text-overflow but not white-space, so the text just wrapped. */
+    .update .h {
+      font-size: 12px; color: var(--muted);
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .update code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
     .update .ubtn {
-      margin-left: auto; flex: 0 0 auto; border: 0; border-radius: 7px; padding: 7px 11px; cursor: pointer;
-      font: 600 11.5px/1 -apple-system, system-ui, sans-serif; background: var(--accent); color: #fff;
+      margin-left: auto; flex: 0 0 auto; border: 0; border-radius: var(--r1); padding: 7px 11px; cursor: pointer;
+      font-family: inherit; font-size: 13px; font-weight: 600; line-height: 1; background: var(--accent); color: var(--on-accent);
+      /* the label cycles Update / Updating… / Reloading… / Retry - hold the width */
+      min-width: 84px; text-align: center;
+      transition: background .12s;
     }
-    .update .ubtn:hover { filter: brightness(1.08); }
+    .update .ubtn:hover { background: color-mix(in srgb, var(--accent) 88%, var(--text)); }
     .update .ubtn:disabled { opacity: .55; cursor: default; }
-    /* RULE: a teal FILL takes dark ink in dark mode. The accent lightens to #2dd4bf
-       there, and white on it is 1.86:1 - #06201c is 9.16:1. Anything that gains a
-       var(--accent) background needs a line here too. */
-    @media (prefers-color-scheme: dark) {
-      .update .ubtn { color: #06201c; }
-      .btn.primary .chip { color: #06201c; }
-      .seg button.active { color: #06201c; }
-    }
-
 
     /* "More ways to capture": a quiet disclosure, deliberately lighter than a capture
        row so it reads as a hint that there is more - not as a fourth equal choice. */
     .more {
       display: flex; align-items: center; gap: 8px; width: 100%;
-      padding: 8px 10px; border: 0; border-radius: 9px; background: transparent;
-      color: var(--faint); font-weight: 500; font-size: 11.5px; line-height: 1; text-align: left; cursor: pointer;
-      transition: background .13s ease, color .13s ease;
+      padding: 8px 10px; border: 0; border-radius: var(--r1); background: transparent;
+      color: var(--muted); font-weight: 500; font-size: 12px; line-height: 1; text-align: left; cursor: pointer;
+      font-family: inherit;
+      transition: background .12s ease, color .12s ease;
     }
-    .more:hover { background: var(--surface-2); color: var(--muted); }
-    .more:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .more:hover { background: var(--surface-2); color: var(--text); }
     .more-chev {
       width: 13px; height: 13px; flex: 0 0 auto; fill: none; stroke: currentColor;
-      stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round;
+      stroke-width: 1.846; stroke-linecap: round; stroke-linejoin: round;
       transition: transform .18s ease;
     }
     .more[aria-expanded="true"] .more-chev { transform: rotate(90deg); }
-    .more[aria-expanded="true"] { color: var(--muted); }
+    .more[aria-expanded="true"] { color: var(--text); }
     .more-n {
-      margin-left: auto; flex: 0 0 auto; font: 600 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
-      color: var(--faint); background: var(--surface-2); border: 1px solid var(--border);
-      padding: 3px 6px; border-radius: 999px;
+      margin-left: auto; flex: 0 0 auto;
+      color: var(--muted); background: var(--surface-2); border: 1px solid var(--rule);
+      padding: 2px 6px; border-radius: var(--r1);
     }
     .more[aria-expanded="true"] .more-n { opacity: 0; }
     /* Animate a measured height. The tidy 0fr->1fr grid trick is one-way here: with
@@ -148,21 +213,28 @@
     .more-inner { display: flex; flex-direction: column; gap: 6px; }
     /* only once it has settled, so a focus ring is not clipped by the animating box */
     .more-wrap.settled { overflow: visible; }
-    @media (prefers-reduced-motion: reduce) {
-      .more-wrap, .more-chev { transition: none; }
-    }
+
     /* footer */
     .foot {
       display: flex; align-items: center; justify-content: flex-end; gap: 2px;
-      padding: 8px 10px 11px; border-top: 1px solid var(--border);
+      padding: 8px 10px 11px; border-top: 1px solid var(--rule);
     }
-    .foot a {
-      display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 500;
-      color: var(--muted); text-decoration: none; cursor: pointer; padding: 6px 9px; border-radius: 7px;
-      transition: background .13s, color .13s;
+    .foot button {
+      display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500;
+      color: var(--muted); text-decoration: none; cursor: pointer; padding: 6px 9px; border-radius: var(--r1);
+      transition: background .12s, color .12s;
     }
-    .foot a:hover { background: var(--surface-2); color: var(--text); }
-    .foot a svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; }
+    .foot button:hover { background: var(--surface-2); color: var(--text); }
+    /* linecap/linejoin were missing here, which is why the Shortcuts keyboard
+       glyph's four keycap dots - zero-length paths - never rendered at all. */
+    .foot button svg {
+      width: 14px; height: 14px; fill: none; stroke: currentColor;
+      stroke-width: 1.714; stroke-linecap: round; stroke-linejoin: round;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+    }
   </style>
 </head>
 <body>
@@ -186,17 +258,17 @@
     </div>
 
     <button class="btn primary" id="full">
-      <span class="chip"><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></span>
+      <span class="chip"><svg viewBox="0 0 24 24"><path d="M5 22V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v17"/><path d="M9 7h6M9 11h6M9 15h6M9 19h6"/></svg></span>
       <span class="txt"><b>Full page</b><span>Entire scrollable page</span></span>
       <span class="kbd" id="kbd-full" hidden></span>
     </button>
     <button class="btn" id="visible">
-      <span class="chip"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3"/></svg></span>
+      <span class="chip"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 8.5h20"/><path d="M5 6.2h.01M7.5 6.2h.01"/></svg></span>
       <span class="txt"><b>Visible area</b><span>Just what you see now</span></span>
       <span class="kbd" id="kbd-visible" hidden></span>
     </button>
     <button class="btn" id="region">
-      <span class="chip"><svg viewBox="0 0 24 24"><path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/><rect x="8" y="8" width="8" height="8" rx="1" stroke-dasharray="2 2"/></svg></span>
+      <span class="chip"><svg viewBox="0 0 24 24"><path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/><rect x="8" y="8" width="8" height="8" rx="1" stroke-dasharray="3.2 2.4"/></svg></span>
       <span class="txt"><b>Capture area</b><span>Drag to select &middot; scrolls</span></span>
       <span class="kbd" id="kbd-region" hidden></span>
     </button>
@@ -208,12 +280,12 @@
     <div class="more-wrap" id="moreWrap">
       <div class="more-inner">
         <button class="btn" id="element">
-      <span class="chip"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg></span>
+      <span class="chip"><svg viewBox="0 0 24 24"><path d="M3 8V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v3"/><path d="M3 13v3a2 2 0 0 0 2 2h4"/><path d="M13 12.5l8.5 3.6-3.5 1.2-1.2 3.5z"/></svg></span>
       <span class="txt"><b>Capture element</b><span>Hover &amp; click a component</span></span>
       <span class="kbd" id="kbd-element" hidden></span>
         </button>
         <button class="btn" id="scroller">
-      <span class="chip"><svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="13" height="16" rx="2"/><path d="M6 8.5h6M6 12h6M6 15.5h4"/><path d="M20 7v9m0 0l-2.4-2.4M20 16l2.4-2.4"/></svg></span>
+      <span class="chip"><svg viewBox="0 0 24 24"><rect x="2" y="4" width="14" height="16" rx="1.5"/><path d="M2 9h14M7 9v11M11.5 9v11"/><path d="M20 7v10m0 0l-2.3-2.3M20 17l2.3-2.3"/></svg></span>
       <span class="txt"><b>Scrolling table</b><span>Whole grid, headings included</span></span>
       <span class="kbd" id="kbd-scroller" hidden></span>
         </button>
@@ -231,9 +303,9 @@
   </div>
 
   <div class="foot">
-    <a id="recentLink" title="Reopen one of your last 3 captures"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Recent</a>
-    <a id="shortcuts" title="Set or repair the keyboard shortcuts"><svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8"/></svg>Shortcuts</a>
-    <a id="options"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H1a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 2.6 7a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H7a1.6 1.6 0 0 0 1-1.5V1a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V7a1.6 1.6 0 0 0 1.5 1H23a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg>Settings</a>
+    <button type="button" id="recentLink" title="Reopen one of your last 3 captures"><svg viewBox="0 0 24 24"><path d="M3.5 12a8.5 8.5 0 1 0 2.9-6.4L3 8.4"/><path d="M3 4.2v4.4h4.4"/><path d="M12 7.8V12l3 1.9"/></svg>Recent</button>
+    <button type="button" id="shortcuts" title="Set or repair the keyboard shortcuts"><svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M7 10.5h.01M12 10.5h.01M17 10.5h.01M7.5 14.5h9"/></svg>Shortcuts</button>
+    <button type="button" id="options"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7.4"/><path d="M12 4.6V2.4M12 19.4v2.2M4.6 12H2.4M19.4 12h2.2M6.8 6.8L5.2 5.2M17.2 17.2l1.6 1.6M17.2 6.8l1.6-1.6M6.8 17.2l-1.6 1.6"/></svg>Settings</button>
   </div>
   <script src="popup.js"></script>
 </body>
