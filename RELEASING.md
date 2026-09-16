@@ -10,12 +10,42 @@ just push, and everyone's popup shows an "Update available" banner.
    - `version.json`  → `"version"`
    (the popup compares the installed `manifest.json` version against the repo's
    `version.json`; if the repo is higher, teammates see the banner)
-3. Commit & push:
+3. Commit, **tag**, & push:
    ```
    git add -A
    git commit -m "v1.1.0: what changed"
-   git push
+   git tag -a v1.1.0 -m "v1.1.0: what changed"
+   git push --follow-tags
    ```
+   The tag is what makes that release a named point someone can go back to — see
+   **Rolling back** below. A release without a tag cannot be rolled back to by name.
+
+## Rolling back
+
+Every release is tagged, so any of them can be restored by name.
+
+A teammate double-clicks **`rollback.cmd`**, picks a version from the list (or types
+`latest` to come forward again), then reloads at `chrome://extensions`. To check it
+worked they open the popup — the footer shows the version they are now on.
+
+Two things that script deliberately does, and why:
+
+- **It stays on `main`** (`git reset --hard <tag>`) instead of checking the tag out.
+  A checked-out tag leaves git in a detached HEAD, and the one-click updater's host
+  reads the branch with `git rev-parse --abbrev-ref HEAD` — which returns `HEAD` when
+  detached. It would then `reset --hard origin/HEAD` and silently pull the person
+  forward again, undoing their rollback with no warning.
+- **It refuses when the working tree is dirty**, because `reset --hard` would throw
+  those edits away. It prints what it found and stops.
+
+A rollback is not permanent: clicking **"Update now"** in the popup, or running
+`update.cmd`, brings that person forward to the newest version again. That is also the
+way back for anyone who rolled back far enough that `rollback.cmd` itself is not in the
+files any more.
+
+If a release turns out to be bad for *everyone*, roll the repo back rather than asking
+twelve people to: `git revert <bad commit>`, bump the version again, and push. Everyone
+then gets the fix through the normal banner.
 
 ## What a teammate does when they see the "Update available" banner
 - **If they ran `install-updater.cmd` once (recommended):** just click **"Update now"**
