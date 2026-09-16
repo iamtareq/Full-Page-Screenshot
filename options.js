@@ -33,9 +33,30 @@ const els = {
   status: document.getElementById("status")
 };
 
+// A native range draws no filled portion, so the track carries --fill and
+// paints it with a gradient. Display only - no setting reads this.
+function paintTrack(input) {
+  if (!input) return;
+  const min = parseFloat(input.min), max = parseFloat(input.max), v = parseFloat(input.value);
+  if (!isFinite(min) || !isFinite(max) || !isFinite(v) || max === min) return;
+  input.style.setProperty("--fill", String((v - min) / (max - min)));
+}
+
+function reflectEnv() {
+  // The environment line is part of the URL bar; with the bar off it has
+  // nothing to be part of.
+  if (!els.envBar || !els.infoBar) return;
+  els.envBar.disabled = !els.infoBar.checked;
+  const row = els.envBar.closest(".row");
+  if (row) row.style.opacity = els.infoBar.checked ? "" : ".55";
+}
+
 function reflect() {
   els.qval.textContent = Math.round(parseFloat(els.jpegQuality.value) * 100) + "%";
   els.dval.textContent = Math.round(parseFloat(els.tileDelay.value)) + " ms";
+  paintTrack(els.jpegQuality);
+  paintTrack(els.tileDelay);
+  reflectEnv();
   fnamePreview();
 }
 
@@ -76,6 +97,10 @@ async function load() {
   reflect();
 }
 
+// The glyph has to change too. Colour alone is the one channel a colour-blind
+// user does not have, and a red checkmark still reads as "done".
+function setMark(d) { const m = document.getElementById("statusMark"); if (m) m.setAttribute("d", d); }
+
 async function save() {
   const settings = {
     format: els.format.value,
@@ -96,11 +121,39 @@ async function save() {
   if (!settings.recentEnabled) {
     try { indexedDB.deleteDatabase("fpc-captures"); } catch (_) {}
   }
-  await chrome.storage.sync.set({ settings });
+  // Without this a quota rejection left the page silent - no confirmation and
+  // no failure, so the user could not tell the save had not happened.
+  try {
+    await chrome.storage.sync.set({ settings });
+    els.status.classList.remove("fail");
+    setMark("M5 13l4 4L19 7");           // a tick
+    els.status.lastChild.textContent = "Saved";
+  } catch (e) {
+    els.status.classList.add("fail");
+    setMark("M6 6l12 12M18 6L6 18");     // a cross, not a red tick
+    els.status.lastChild.textContent = "Could not save";
+  }
   els.status.classList.add("show");
-  setTimeout(() => els.status.classList.remove("show"), 1400);
+  setTimeout(() => els.status.classList.remove("show"), 1800);
 }
 
+/* The redirect URI has to be pasted into Google character-perfect, so give
+   it a real copy affordance instead of asking people to select it by hand. */
+const copyBtn = document.getElementById("copyRedirect");
+if (copyBtn) copyBtn.addEventListener("click", async () => {
+  const ru = document.getElementById("redirectUri");
+  const text = ru ? ru.textContent.trim() : "";
+  if (!text || text === "\u2026") return;
+  try {
+    await navigator.clipboard.writeText(text);
+    copyBtn.textContent = "Copied";
+  } catch (_) {
+    copyBtn.textContent = "Copy failed";
+  }
+  setTimeout(() => { copyBtn.textContent = "Copy"; }, 1600);
+});
+
+els.infoBar.addEventListener("change", reflectEnv);
 els.jpegQuality.addEventListener("input", reflect);
 els.tileDelay.addEventListener("input", reflect);
 els.filenameTemplate.addEventListener("input", fnamePreview);

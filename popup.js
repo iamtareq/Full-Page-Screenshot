@@ -37,6 +37,9 @@ function setMore(open, animate) {
   if (moreDone) { moreWrap.removeEventListener("transitionend", moreDone); moreDone = null; }
   clearTimeout(moreTimer);
   moreWrap.classList.remove("settled");            // clip while it moves
+  // A collapsed panel is 0px tall but its two buttons are still in the tab
+  // order, so Tab used to stop twice on nothing.
+  moreWrap.inert = !open;
   if (!animate) {
     moreWrap.style.transition = "none";
     moreWrap.style.height = open ? "auto" : "0px";
