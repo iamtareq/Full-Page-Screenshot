@@ -45,6 +45,7 @@ let stampLocked = false;     // info-bar toggle frozen after crop / annotate
 let tileChain = Promise.resolve(); // serializes async tile draws; finalize waits on it
 let infoBarLink = null;      // {x,y,w,h,uri} device px of the URL text (for PDF links)
 let lastDriveLink = null;    // last uploaded Drive link (for the notification click)
+let stampTime = null;        // the capture's own moment, frozen once: every bar redraw prints the SAME time
 let captureTime = null;      // set when an older capture is restored, so the info bar keeps ITS time
 let captureSettled = false;
 let recentEnabled = false;   // Settings > "Keep recent captures" - opt-in, off until enabled
@@ -70,6 +71,14 @@ let annotations = [];
 let undoStack = [];
 let redoStack = [];
 const HISTORY_LIMIT = 60;
+// An entry IS the cloned annotation array (so undoStack[i].length still counts marks),
+// tagged with .rects - the page rectangles in force when it was taken. A DOCUMENT entry
+// (Crop, and later Join / Swap / Undo join) also carries .doc - what the picture was - and
+// .rid, the Recent row it belonged to. Only snapAnnots() and snapDoc() make entries; restores
+// use e.slice(), so the tags never leak into the live list.
+let hostPid = "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);   // this tab's own page
+let docBusy = null;          // a Promise while a document restore composes; edits wait for it
+let docDirty = false;        // the picture changed shape since its Recent row was last written
 let exportingAnnots = false;   // true while flattening: skip on-screen-only selection UI
 // A marquee waiting for Delete. Paint-style: the drag picks the area, Delete erases it.
 // Deliberately NOT an annotation - it carries no ink, exports nothing, and is dropped
@@ -325,6 +334,7 @@ function finalize() {
   stage.hidden = false;
   tools.hidden = false;
   baseSeg0 = segments[0] ? segments[0].canvas : null;
+  if (!stampTime) stampTime = captureTime || new Date();   // before the first bar is drawn
   applyInfoBar();            // stamp URL + time bar on top (if enabled)
   // Crop & annotate only make sense on a single-canvas image.
   const single = segments.length === 1;
@@ -455,7 +465,7 @@ function drawInfoBar(ctx, w, barH) {
   ctx.textBaseline = "middle";
   ctx.font = `600 ${fs}px system-ui, "Segoe UI", Arial, sans-serif`;
 
-  let timeStr = (captureTime || new Date()).toLocaleString();
+  let timeStr = (stampTime || captureTime || new Date()).toLocaleString();
   let timeW = ctx.measureText(timeStr).width;
   let maxUrlW = w - pad * 3 - timeW;
   if (maxUrlW < 40) {           // bar too narrow for both — keep the URL, drop the time
@@ -537,13 +547,11 @@ function shiftAnnotList(list, dy) {
 // The undo/redo snapshots are independent copies in the same coordinate space, so
 // they must move with the live list - otherwise undo restores shapes barH px off.
 function shiftAnnotations(dy) {
-  shiftAnnotList(annotations, dy);
-  for (const s of undoStack) shiftAnnotList(s, dy);
-  for (const s of redoStack) shiftAnnotList(s, dy);
+  shiftAnnotList(annotations, dy);   // history entries carry their own rects; a restore remaps them
 }
 
 function toggleInfoBar() {
-  if (stampLocked || segments.length !== 1) return;
+  if (stampLocked || segments.length !== 1 || docBusy) return;
   const barH = infoBarHeight();
   const turningOn = !infoBar;
   infoBar = !infoBar;
@@ -955,7 +963,7 @@ window.addEventListener("afterprint", cleanupPrint);
 let cropping = false, dragStart = null;
 
 function startCrop() {
-  if (segments.length !== 1) return;
+  if (segments.length !== 1 || docBusy) return;
   exitAnnot();
   cropping = true;
   cropBar.hidden = false;
@@ -1037,6 +1045,9 @@ function applyCrop() {
   const ctx = out.getContext("2d");
   ctx.drawImage(src, sx, sy, sw, sh, 0, 0, sw, sh);
 
+  // One Ctrl+Z brings back the uncropped picture, its live marks and its Recent row. Taken
+  // BEFORE the row is flushed and released below, so the entry remembers which row it was.
+  pushDocHistory("Crop");
   // Replace the old canvas + annotation layer (annotations are now baked in).
   displayed.remove();
   if (annotCanvas) { annotCanvas.remove(); annotCanvas = null; annotCtx = null; }
@@ -1047,7 +1058,7 @@ function applyCrop() {
   flushRecentSave();
   currentRecentId = null;
   if (annotations.length) bakedMarks = true;   // the marks now live only in these pixels
-  annotations = []; undoStack = []; redoStack = [];
+  annotations = [];
   markEdited();
   canvasHost.insertBefore(out, cropOverlay);
   segments = [{ canvas: out, ctx, startY: 0, height: sh }];
@@ -1055,6 +1066,7 @@ function applyCrop() {
   // The crop already baked in whatever bar state was showing; freeze the toggle.
   baseSeg0 = out;
   stampLocked = true;
+  hostPid = "p" + Date.now().toString(36) + "c";   // a different picture: a new page identity
   infoBarLink = null; // URL position no longer known after a crop; PDF link dropped
   reflectInfoBarBtn();
   wasCropped = true;
@@ -1062,7 +1074,7 @@ function applyCrop() {
   endCrop();
   applyZoom();
   maybeAnnot();
-  toast("Cropped");
+  toast("Cropped \u00b7 Ctrl+Z undoes it");
 }
 
 /* ------------------------- Annotation ------------------------- */
@@ -1335,6 +1347,7 @@ function beginDrag(a, p, e, handle) {
 
 function onAnnotDown(e) {
   if (!annotating || !annotCanvas || e.target !== annotCanvas) return;
+  if (docBusy) return;                           // the picture is being swapped; wait
   if (e.button !== 0 || !e.isPrimary) return;   // primary mouse button / first touch only
   if (liveAnnot) return;                         // one stroke at a time (ignore extra touches)
   e.preventDefault();
@@ -1506,13 +1519,59 @@ function cloneAnnots(list) {
     return c;
   });
 }
-// Call BEFORE mutating `annotations` so undo can restore the previous state.
-function pushHistory() {
-  undoStack.push(cloneAnnots(annotations));
+// The page rectangles in canvas px: where each page's CONTENT sits, below its live bar.
+function pageRects() {
+  const b = baseSeg0 || (segments[0] && segments[0].canvas);
+  const y = (b && infoBar && !stampLocked) ? infoBarHeight() : 0;
+  return [{ pid: hostPid, x: 0, y, w: b ? b.width : 0, h: b ? b.height : 0, scale: 1 }];
+}
+function snapAnnots() { const s = cloneAnnots(annotations); s.rects = pageRects(); return s; }
+function captureDoc() {
+  return { kind: "single", base: baseSeg0, infoBar, stampLocked, wasCropped, meta, dpr, hostPid, stampTime };
+}
+function snapDoc(label) {
+  const s = snapAnnots(); s.doc = captureDoc(); s.rid = currentRecentId; s.label = label || ""; return s;
+}
+function pushEntry(s) {
+  undoStack.push(s);
   if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
   redoStack = [];
   scheduleRecentSave();
   markEdited();
+}
+// Call BEFORE mutating `annotations` so undo can restore the previous state.
+function pushHistory() { pushEntry(snapAnnots()); }
+// Call BEFORE a document change. One Ctrl+Z brings back the picture, its marks and its Recent row.
+function pushDocHistory(label) { pushEntry(snapDoc(label)); }
+function shiftAnnotXY(a, dx, dy) {
+  if (typeof a.x1 === "number") a.x1 += dx;
+  if (typeof a.x2 === "number") a.x2 += dx;
+  if (typeof a.y1 === "number") a.y1 += dy;
+  if (typeof a.y2 === "number") a.y2 += dy;
+  if (a.points) for (const p of a.points) { p.x += dx; p.y += dy; }
+}
+function nearestRect(rects, x, y) {
+  let best = null, bd = Infinity;
+  for (const r of rects) {
+    const dx = Math.max(r.x - x, 0, x - (r.x + r.w)), dy = Math.max(r.y - y, 0, y - (r.y + r.h));
+    if (dx * dx + dy * dy < bd) { bd = dx * dx + dy * dy; best = r; }
+  }
+  return best;
+}
+// Move marks from the page rectangles they were drawn against to where those pages sit now.
+// Single captures only move vertically (the bar toggle); milestone 2 replaces this with the
+// per-end, scaled version that joined pages need, under the same signature.
+function remapAnnots(list, from, to) {
+  if (!from || !to) return list;
+  for (const a of list) {
+    const cx = (a.x2 != null && a.type !== "callout") ? (a.x1 + a.x2) / 2 : a.x1;
+    const cy = (a.y2 != null && a.type !== "callout") ? (a.y1 + a.y2) / 2 : a.y1;
+    const pf = from.find((r) => cx >= r.x && cx < r.x + r.w && cy >= r.y && cy < r.y + r.h) || nearestRect(from, cx, cy);
+    const pt = pf && to.find((r) => r.pid === pf.pid);
+    if (!pt) continue;
+    if (pt.x !== pf.x || pt.y !== pf.y) shiftAnnotXY(a, pt.x - pf.x, pt.y - pf.y);
+  }
+  return list;
 }
 
 // ---- Paint-style area selection -------------------------------------------
@@ -1998,29 +2057,66 @@ function drawBlur(ctx, x, y, w, h, strength) {
   ctx.imageSmoothingEnabled = true;
 }
 
-function annotUndo() {
+function annotUndo() { return stepHistory(-1); }
+function annotRedo() { return stepHistory(1); }
+function stepHistory(dir) {
+  if (docBusy) return docBusy.then(() => stepHistory(dir));   // presses queue in order
   cancelDrag();
-  if (!undoStack.length) return;
-  redoStack.push(cloneAnnots(annotations));
-  annotations = undoStack.pop();
+  const from = dir < 0 ? undoStack : redoStack, to = dir < 0 ? redoStack : undoStack;
+  if (!from.length) return;
+  const e = from.pop();
+  if (e.doc) { to.push(snapDoc(e.label)); return restoreDoc(e, from, to); }
+  to.push(snapAnnots());
+  annotations = remapAnnots(e.slice(), e.rects, pageRects());
   clearActiveAnnot();            // the snapshot holds fresh objects; the old reference is stale
   renderAnnots();
   scheduleRecentSave();
   markEdited();
 }
-function annotRedo() {
-  cancelDrag();
-  if (!redoStack.length) return;
-  undoStack.push(cloneAnnots(annotations));
-  annotations = redoStack.pop();
-  clearActiveAnnot();
-  renderAnnots();
-  scheduleRecentSave();
-  markEdited();
+function restoreDoc(e, from, to) {
+  if (cropping) endCrop();
+  liveAnnot = null; activePointerId = null; clearPendingSel(); clearActiveAnnot();
+  if (e.rid !== currentRecentId) flushRecentSave();   // the row being left keeps its final state
+  const finish = () => {
+    annotations = remapAnnots(e.slice(), e.rects, pageRects());
+    currentRecentId = e.rid;
+    docDirty = true;
+    renderAnnots();
+    maybeAnnot();
+    scheduleRecentSave();
+    markEdited();
+  };
+  let r;
+  try { r = applyDoc(e.doc); } catch (err) { to.pop(); from.push(e); toast("Couldn't undo that step"); return; }
+  if (!r || typeof r.then !== "function") { finish(); return; }
+  docBusy = r.then(finish, () => { to.pop(); from.push(e); toast("Couldn't undo that step"); })
+    .finally(() => { docBusy = null; });
+  return docBusy;
+}
+function applyDoc(d) {
+  if (d.kind === "joined") return applyJoinedDoc(d);   // async: composes from the page images
+  applySingleDoc(d);
+}
+async function applyJoinedDoc(d) { throw new Error("joined documents arrive in milestone 2"); }
+// Synchronous: every canvas it needs is in hand (the entry pinned the pristine one).
+function applySingleDoc(d) {
+  for (const seg of segments) seg.canvas.remove();
+  baseSeg0 = d.base; infoBar = d.infoBar; stampLocked = d.stampLocked; wasCropped = d.wasCropped;
+  meta = d.meta; dpr = d.dpr; hostPid = d.hostPid;
+  if (d.stampTime) stampTime = d.stampTime;
+  const live = infoBar && !stampLocked;
+  const shown = live ? withInfoBar(baseSeg0) : baseSeg0;   // redrawn bar prints the frozen stampTime
+  if (!live) infoBarLink = null;
+  canvasHost.insertBefore(shown, cropOverlay);
+  segments = [{ canvas: shown, ctx: shown.getContext("2d"), startY: 0, height: shown.height }];
+  fullWpx = baseSeg0.width; fullHpx = baseSeg0.height;
+  if (annotCanvas || annotating) setupAnnotationLayer();
+  el("crop").disabled = false;
+  reflectInfoBarBtn(); updateDims(); applyZoom();
 }
 function annotClear() {
   cancelDrag();
-  if (!annotations.length) return;
+  if (docBusy || !annotations.length) return;
   pushHistory();
   clearActiveAnnot();
   annotations = [];
@@ -2096,17 +2192,55 @@ async function recentDelete(id) { const db = await dbOpen(); await dbRun(db, "re
 // Annotations are stored WITHOUT the info bar's offset, so a capture saved with the
 // bar on and reopened with it off (or vice versa) still lines up.
 function annotsForSave() {
-  const dy = infoBar ? -infoBarHeight() : 0;
+  const dy = (infoBar && !stampLocked) ? -infoBarHeight() : 0;
   const list = cloneAnnots(annotations);
   if (dy) shiftAnnotList(list, dy);
   return list;
 }
-async function recentUpdateAnnots(id, annots) {
+// Every Recent write goes through ONE queue, and each is a read-modify-write inside ONE
+// readwrite transaction. The old read-then-write in two transactions could put an older row
+// shape back with newer marks once whole-row writes exist.
+let recentChain = Promise.resolve();
+function recentQueue(fn) { const p = recentChain.then(fn).catch(() => {}); recentChain = p; return p; }
+// Raw read-modify-write. Call it only from INSIDE a queue link.
+const recentAlias = new Map();   // provisional row id -> the reload's real row (see saveRecent)
+async function rowTx(id, mutate) {
+  id = recentAlias.get(id) || id;
   const db = await dbOpen();
-  const rec = await dbRun(db, "readonly", (st) => st.get(id));
-  if (!rec) return;
+  await dbRun(db, "readwrite", (st) => {
+    const g = st.get(id);
+    g.onsuccess = () => { const rec = g.result; if (!rec) return; if (mutate(rec) !== false) st.put(rec); };
+    return g;
+  });
+}
+// Queued. NEVER await this from inside a recentQueue callback: it would wait for itself.
+function recentPatch(id, mutate) { return recentQueue(() => rowTx(id, mutate)); }
+async function recentUpdateAnnots(id, annots) { return recentPatch(id, (rec) => { rec.annots = annots; }); }
+// A single row turned into the joined image IN PLACE: same id, no new slot, nothing pruned (D3).
+// j = { now, hostPid, title, w, h, thumb, blob, annots, rects, layout, pages:[{pid, jpeg?, ...}] }
+function rowAsJoined(rec, j) {
+  const old = rec.kind === "joined" ? rec.pages
+    : [{ pid: j.hostPid, jpeg: rec.blob, thumb: rec.thumb, w: rec.w, h: rec.h, title: rec.title,
+         url: rec.url, env: rec.env, dpr: rec.dpr, stampTs: rec.ts }];
+  const upgrading = rec.kind !== "joined";
+  rec.pages = j.pages.map((p) => { const o = old.find((q) => q.pid === p.pid) || {}; return Object.assign({}, o, p, { jpeg: p.jpeg || o.jpeg }); });
+  if (rec.pages.some((p) => !p.jpeg)) return false;          // never write a row it cannot reopen
+  if (upgrading) { rec.hostTs = rec.ts; rec.ts = Math.max(rec.ts, j.now); }   // newest once, at the join only
+  rec.kind = "joined"; rec.hostPid = j.hostPid;
+  rec.title = j.title; rec.w = j.w; rec.h = j.h; rec.thumb = j.thumb; rec.blob = j.blob;
+  rec.annots = j.annots; rec.rects = j.rects; rec.layout = j.layout;
+}
+// Back to a single capture (Undo join, or Ctrl+Z of a join): the host page's own JPEG, thumb
+// and capture time come back out of pages[] - no re-encode.
+function rowAsSingle(rec, pid, annots) {
+  if (rec.kind === "joined") {
+    const p = (rec.pages || []).find((q) => q.pid === pid);
+    if (!p || !p.jpeg) return false;
+    rec.blob = p.jpeg; rec.thumb = p.thumb; rec.w = p.w; rec.h = p.h; rec.title = p.title;
+    rec.url = p.url; rec.env = p.env; rec.dpr = p.dpr; rec.ts = rec.hostTs || rec.ts;
+    for (const k of ["kind", "pages", "layout", "rects", "hostPid", "hostTs"]) delete rec[k];
+  }
   rec.annots = annots;
-  await dbRun(db, "readwrite", (st) => { st.put(rec); });
 }
 // There is no "I am done annotating" moment, so save shortly after every change
 // instead. Dragging fires constantly, hence the debounce; the tab going away
@@ -2120,7 +2254,12 @@ function flushRecentSave() {
   if (recentSaveTimer) { clearTimeout(recentSaveTimer); recentSaveTimer = null; }
   if (!currentRecentId) return;
   const id = currentRecentId;
+  if (docDirty) { docDirty = false; return recentWriteDoc(id); }
   try { recentUpdateAnnots(id, annotsForSave()).catch(() => {}); } catch (_) {}
+}
+function recentWriteDoc(id) {
+  const annots = annotsForSave(), pid = hostPid;             // snapshot NOW, write later
+  return recentPatch(id, (rec) => rowAsSingle(rec, pid, annots));   // joined docs: milestone 2
 }
 
 async function recentPut(rec) {
@@ -2134,16 +2273,9 @@ function saveRecent() {
   try {
     if (!recentEnabled) return;                                      // nothing is kept unless the user opted in
     if (!baseSeg0 || segments.length !== 1 || captureTime) return;   // single-image captures only; never re-save a restored one
-    if (jobId && !recentJobChecked) {
-      // A reloaded editor re-streams the SAME job. Re-use its row (and bring its marks
-      // back) instead of adding a duplicate that pushes an older capture out of Recent.
-      recentJobChecked = true;
-      recentList().then((all) => {
-        const prior = all.find((r) => r.job === jobId);
-        if (prior && !rowHeldElsewhere(prior.id)) reattachRecent(prior); else saveRecent();   // a duplicated tab gets its own row
-      }, () => saveRecent());
-      return;
-    }
+    if (currentRecentId) return;                // already has (or is getting) a row
+    const checkJob = !!jobId && !recentJobChecked;
+    recentJobChecked = true;
     const src = baseSeg0;
     const tw = 220, th = Math.min(400, Math.max(1, Math.round(src.height * tw / src.width)));
     const tc = document.createElement("canvas"); tc.width = tw; tc.height = th;
@@ -2152,10 +2284,30 @@ function saveRecent() {
     const m = meta || {};
     const id = Date.now();
     currentRecentId = id;                       // later annotation edits update THIS row
-    src.toBlob((blob) => {
+    // The id is set above, synchronously, and this link is the FIRST in the Recent queue: an
+    // edit flushed during the encode, or a join clicked right after the capture, queues behind
+    // the row instead of finding none.
+    // Encoding starts NOW, in parallel with the job check: a join right after the capture
+    // waits for this row, so it should be ready as soon as possible. (On a reload that
+    // re-attaches, the encode is simply unused.)
+    const encoded = new Promise((res) => src.toBlob(res, "image/jpeg", 0.85));
+    recentQueue(async () => {
+      if (checkJob) {
+        // A reloaded editor re-streams the SAME job. Re-use its row (and bring its marks back)
+        // instead of adding a duplicate that pushes an older capture out of Recent. A
+        // duplicated tab is not a reload: it gets its own row.
+        const all = await recentList().catch(() => []);
+        const prior = all.find((r) => r.job === jobId);
+        if (prior && !rowHeldElsewhere(prior.id)) {
+          recentAlias.set(id, prior.id);         // writes queued against `id` land on the real row
+          if (currentRecentId === id) reattachRecent(prior);
+          return;
+        }
+      }
+      const blob = await encoded;
       if (!blob) return;
-      recentPut({ id, ts: id, job: jobId || null, title: m.title || "", url: m.url || "", dpr, w: src.width, h: src.height, env: m.env || null, thumb, blob, annots: [] }).catch(() => {});
-    }, "image/jpeg", 0.85);
+      return recentPut({ id, ts: id, job: jobId || null, title: m.title || "", url: m.url || "", dpr, w: src.width, h: src.height, env: m.env || null, thumb, blob, annots: [] });
+    });
   } catch (_) {}
 }
 
@@ -2213,11 +2365,13 @@ function closeRecent() { const d = el("recentDrawer"); if (d) d.hidden = true; e
 function toggleRecent() { el("recentDrawer").hidden ? openRecent() : closeRecent(); }
 
 async function restoreRecent(id) {
+  if (docBusy) { toast("One moment - still putting the picture back"); return; }
   if (jobId && !captureSettled) { toast("Wait for the current capture to finish, then reopen a recent one"); return; }
   let rec = null;
   try { rec = await recentGet(id); } catch (_) {}
   if (!rec) { toast("That capture is no longer available"); return; }
   if (annotations.length && !confirm("Replace the current image? Annotations on it will be lost.")) return;
+  flushRecentSave();          // the row being left keeps up to 1.5 s of pending edits
   let bmp;
   try { bmp = await createImageBitmap(rec.blob); } catch (_) { toast("Couldn't load that capture"); return; }
 
@@ -2239,6 +2393,7 @@ async function restoreRecent(id) {
   meta = { mode: "visible", title: rec.title, url: rec.url, dpr: rec.dpr || 1, env: rec.env || undefined };
   dpr = rec.dpr || 1;
   captureTime = new Date(rec.ts);
+  stampTime = captureTime;
   baseSeg0 = canvas; stampLocked = false; infoBarLink = null; aborted = false;
   wasCropped = false;
   lastDriveLink = null;
@@ -2251,6 +2406,7 @@ async function restoreRecent(id) {
   // Bring the saved markup back as real, editable annotations (stored bar-less, so
   // shift them down if the info bar is showing now).
   currentRecentId = rec.id;                   // further edits keep updating this row
+  hostPid = "r" + rec.id; docDirty = false;
   if (rec.annots && rec.annots.length) {
     annotations = cloneAnnots(rec.annots);
     if (infoBar) shiftAnnotList(annotations, infoBarHeight());
