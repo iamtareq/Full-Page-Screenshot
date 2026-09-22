@@ -120,6 +120,7 @@ async function init() {
   paintQuality();
   reflectFormat();
   wireTools();
+  rosterInit();               // before the no-job branch: a ?recent=1 editor that reopens a capture joins too
   learnMyTab();
 
   if (!jobId) {
@@ -230,26 +231,430 @@ async function decodeTile(dataUrl) {
   }
 }
 
-/* ------------------------- Drop guard ------------------------- */
-// Release A (bug 2). Nothing in this editor accepts a drop yet, and a drop the page does not
-// cancel is handed to the browser, which opens the file / link. So every drag is answered here,
-// in the capture phase on window (no element can stop it first), and refused with dropEffect
-// "none". The one exception is text dragged into a text box, which the browser inserts itself.
+/* ------------------------- Drop, paste & file (Join sources) ------------------------- */
+// Pictures come in three ways, none of which needs a permission: a file dropped anywhere on the
+// editor, the hidden <input type=file> behind "Choose image file…", and the paste EVENT (Ctrl+V).
+// navigator.clipboard.read() would need "clipboardRead"; the paste event does not.
+// Every drag that reaches this page is answered here, in the capture phase on window, so no
+// element can stop it first: a drop the page does not cancel is "opened" by the browser, which
+// navigates the tab away and loses the capture (the v1.2.0 bug).
+const INGEST_MAX_BYTES = 100 * 1024 * 1024;  // a 32 Mpx screenshot PNG is 10-40 MB
+const INGEST_MAX_FILES = 8;
+const COPY_TTL_MS = 30 * 60 * 1000;          // how long another editor's Copy can lend its name to a paste
+const COPY_KEEP = 10;
+let ingestBusy = false;
+let lastOwnCopy = null;                      // { w, h, fp } of this tab's last Copy
+let ownExports = [];                         // { w, h, fp } of this tab's last Downloads / Copies
+
 function dragHasFiles(dt) {
   try { return !!dt && Array.prototype.indexOf.call(dt.types || [], "Files") >= 0; } catch (_) { return false; }
 }
-function refuseDrag(e) {
-  if (!dragHasFiles(e.dataTransfer) && isTextEntry(e.target)) return;
+// Why a picture can't be added right now, or null when it can.
+function ingestGate() {
+  if (stage.hidden && !(jobId && !captureSettled)) return "Open a capture first, then add a picture to it.";
+  if (ingestBusy) return "Still adding the last picture…";
+  return joinBlockedReason();
+}
+
+let dragDepth = 0, dragWatch = null;
+function showDropOverlay(reason) {
+  const o = el("dropOverlay"); if (!o) return;
+  const m = el("dropMsg"); if (m) m.textContent = reason || "Drop to join with this capture";
+  o.classList.toggle("blocked", !!reason);
+  o.hidden = false;
+  clearTimeout(dragWatch);                    // backstop in case a dragleave is never delivered
+  dragWatch = setTimeout(hideDropOverlay, 3000);
+}
+function hideDropOverlay() {
+  dragDepth = 0; clearTimeout(dragWatch); dragWatch = null;
+  const o = el("dropOverlay"); if (o) o.hidden = true;
+}
+function onDragOver(e) {
+  const dt = e.dataTransfer;
+  const files = dragHasFiles(dt);
+  if (!files && isTextEntry(e.target)) return;   // text into a text box: the browser's own insert
+  e.preventDefault();                            // the page decides, so the browser never opens the drop
+  const reason = files ? ingestGate() : null;
+  try { if (dt) dt.dropEffect = files && !reason ? "copy" : "none"; } catch (_) {}
+  if (files && !stage.hidden) showDropOverlay(reason);
+}
+function onDragEnter(e) { if (dragHasFiles(e.dataTransfer)) dragDepth++; onDragOver(e); }
+function onDragLeave(e) {
+  if (!dragHasFiles(e.dataTransfer)) return;
+  if (--dragDepth <= 0) hideDropOverlay();
+}
+function onDrop(e) {
+  const dt = e.dataTransfer;
+  const hasFiles = dragHasFiles(dt);
+  if (!hasFiles && isTextEntry(e.target)) return;
+  e.preventDefault();                            // never navigate to / open what was dropped
+  hideDropOverlay();
+  // Read everything NOW: the DataTransfer is emptied as soon as this handler returns.
+  let files = [], folders = 0, uri = "", html = "";
+  try {
+    const items = Array.from((dt && dt.items) || []).filter((i) => i.kind === "file");
+    if (items.length && items[0].webkitGetAsEntry) {
+      for (const i of items) {
+        const en = i.webkitGetAsEntry();
+        if (en && en.isDirectory) { folders++; continue; }
+        const f = i.getAsFile(); if (f) files.push(f);
+      }
+    } else files = Array.from((dt && dt.files) || []);
+  } catch (_) { try { files = Array.from((dt && dt.files) || []); } catch (_) {} }
+  if (!files.length && folders) { if (!stage.hidden) toast("Drop the pictures themselves, not a folder."); return; }
+  if (!files.length) {
+    try { uri = dt ? String(dt.getData("text/uri-list") || "") : ""; html = dt ? String(dt.getData("text/html") || "") : ""; } catch (_) {}
+    if (stage.hidden) return;
+    if (/<img[\s>]/i.test(html) || /^\s*https?:/i.test(uri)) toast("To join a picture from a web page, save it to your PC first, then drop the file.");
+    return;
+  }
+  const reason = ingestGate();
+  if (reason) { toast(reason); return; }
+  ingestFiles(files, "file");
+}
+
+function onPaste(e) {
+  if (isTextEntry(e.target)) return;             // typing in a text / callout box: a normal text paste
+  const cd = e.clipboardData;
+  let files = [];
+  try {                                          // read NOW, before any await
+    files = Array.from((cd && cd.files) || []);
+    if (!files.length && cd && cd.items) {
+      files = Array.from(cd.items).filter((i) => i.kind === "file" && /^image\//i.test(i.type || ""))
+        .map((i) => i.getAsFile()).filter(Boolean);
+    }
+  } catch (_) {}
+  if (stage.hidden) return;
+  if (!files.length) { toast("Nothing to paste. Copy a picture first (Copy button or Win+Shift+S)."); return; }
   e.preventDefault();
-  try { if (e.dataTransfer) e.dataTransfer.dropEffect = "none"; } catch (_) {}
+  const reason = ingestGate();
+  if (reason) { toast(reason); return; }
+  ingestPaste(files[0]);
 }
-function wireDropGuard() {
+
+function openJoinFilePicker() { const i = el("joinFile"); if (i) i.click(); }
+function onJoinFileChange(e) {
+  const input = e.target;
+  const files = Array.from(input.files || []);  // copy BEFORE clearing: clearing empties input.files
+  input.value = "";                              // so picking the same file again still fires "change"
+  if (!files.length) return;                     // the picker was cancelled
+  const reason = ingestGate();
+  if (reason) { toast(reason); return; }
+  ingestFiles(files, "file");
+}
+
+// Wired at script load (not in wireTools, which only runs after init's first await): from the
+// first frame, no drop can ever navigate this tab.
+function wireIngest() {
   window.addEventListener("dragstart", (e) => { if (!isTextEntry(e.target)) e.preventDefault(); }, true);
-  window.addEventListener("dragenter", refuseDrag, true);
-  window.addEventListener("dragover", refuseDrag, true);
-  window.addEventListener("drop", refuseDrag, true);
+  window.addEventListener("dragenter", onDragEnter, true);
+  window.addEventListener("dragover", onDragOver, true);
+  window.addEventListener("dragleave", onDragLeave, true);
+  window.addEventListener("drop", onDrop, true);
+  window.addEventListener("dragend", hideDropOverlay, true);
+  window.addEventListener("paste", onPaste);
+  const fi = el("joinFile"); if (fi) fi.addEventListener("change", onJoinFileChange);
 }
-wireDropGuard();
+wireIngest();
+
+/* ---- reading one picture safely ---- */
+// Only Blob/File bytes are ever decoded (createImageBitmap, or an <img> on a blob: URL this
+// page made), so the canvas stays origin-clean and Download / Copy / Drive keep working.
+// A URL from a drag is never loaded: that would need a host permission and would taint.
+function sniffImage(b) {
+  const at = (i, s) => { for (let k = 0; k < s.length; k++) if (b[i + k] !== s.charCodeAt(k)) return false; return true; };
+  if (b.length >= 8 && b[0] === 0x89 && at(1, "PNG\r\n\x1a\n")) return "png";
+  if (b.length >= 3 && b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF) return "jpeg";
+  if (at(0, "GIF87a") || at(0, "GIF89a")) return "gif";
+  if (at(0, "RIFF") && at(8, "WEBP")) return "webp";
+  if (at(0, "BM") && b.length >= 18 && [12, 40, 52, 56, 108, 124].indexOf(b[14] | b[15] << 8) >= 0) return "bmp";
+  if (at(4, "ftyp")) {
+    const brands = String.fromCharCode.apply(null, Array.from(b.subarray(8, Math.min(b.length, 40))));
+    if (/avi[fs]/.test(brands)) return "avif";
+    if (/hei[cxs]|mif1|msf1/.test(brands)) return "heic";
+  }
+  if (at(0, "%PDF-")) return "pdf";
+  const txt = String.fromCharCode.apply(null, Array.from(b.subarray(0, Math.min(b.length, 256)))).replace(/^\xEF\xBB\xBF/, "").trimStart();
+  if (/^(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*<svg[\s>]/i.test(txt) || /^<\?xml/i.test(txt)) return "svg";
+  return null;
+}
+const PICTURE_MIME = { png: "image/png", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", bmp: "image/bmp", avif: "image/avif" };
+
+// Width and height from the header, without decoding. null = the header didn't say (yet).
+function imageSize(b, kind) {
+  const u16be = (i) => b[i] << 8 | b[i + 1], u16le = (i) => b[i] | b[i + 1] << 8;
+  const u32be = (i) => (b[i] << 24 >>> 0) + (b[i + 1] << 16 | b[i + 2] << 8 | b[i + 3]);
+  const i32le = (i) => b[i] | b[i + 1] << 8 | b[i + 2] << 16 | b[i + 3] << 24;
+  const at = (i, s) => { for (let k = 0; k < s.length; k++) if (b[i + k] !== s.charCodeAt(k)) return false; return true; };
+  try {
+    if (kind === "png") return b.length >= 24 && at(12, "IHDR") ? { w: u32be(16), h: u32be(20) } : null;
+    if (kind === "gif") return b.length >= 10 ? { w: u16le(6), h: u16le(8) } : null;
+    if (kind === "bmp") {
+      if (b.length < 26) return null;
+      if ((b[14] | b[15] << 8) === 12) return { w: u16le(18), h: u16le(20) };
+      return { w: Math.abs(i32le(18)), h: Math.abs(i32le(22)) };   // negative height = top-down rows
+    }
+    if (kind === "webp") {
+      if (b.length < 30) return null;
+      if (at(12, "VP8 ")) return { w: u16le(26) & 0x3FFF, h: u16le(28) & 0x3FFF };
+      if (at(12, "VP8L")) {
+        const b1 = b[21], b2 = b[22], b3 = b[23], b4 = b[24];
+        return { w: 1 + ((b2 & 0x3F) << 8 | b1), h: 1 + ((b4 & 0xF) << 10 | b3 << 2 | (b2 & 0xC0) >> 6) };
+      }
+      if (at(12, "VP8X")) return { w: 1 + (b[24] | b[25] << 8 | b[26] << 16), h: 1 + (b[27] | b[28] << 8 | b[29] << 16) };
+      return null;
+    }
+    if (kind === "jpeg") {
+      let i = 2;
+      while (i + 9 < b.length) {
+        if (b[i] !== 0xFF) return null;                          // lost sync: let the decoder decide
+        const m = b[i + 1];
+        if (m === 0xFF) { i++; continue; }                       // fill byte
+        if (m === 0xD8 || m === 0x01 || (m >= 0xD0 && m <= 0xD7)) { i += 2; continue; }
+        if ((m >= 0xC0 && m <= 0xCF) && m !== 0xC4 && m !== 0xC8 && m !== 0xCC) return { w: u16be(i + 7), h: u16be(i + 5) };
+        i += 2 + u16be(i + 2);
+      }
+      return null;
+    }
+    if (kind === "avif") {                                        // largest 'ispe' (grid images carry tiles too)
+      let best = null;
+      for (let i = 4; i + 16 <= b.length; i++) {
+        if (at(i, "ispe")) { const w = u32be(i + 8), h = u32be(i + 12); if (!best || w * h > best.w * best.h) best = { w, h }; }
+      }
+      return best;
+    }
+  } catch (_) {}
+  return null;
+}
+function checkPixels(w, h) {
+  if (!(w > 0 && h > 0)) throw new Error("That picture couldn't be read.");
+  if (w > MAX_SIDE || h > MAX_SIDE || w * h > JOIN_MAX_PX) {
+    throw new Error("That picture is too large to join (" + w + "×" + h + "). Capture just the part you need with Area (Alt+Shift+A), then join it.");
+  }
+}
+async function decodeBlob(blob) {
+  try {
+    return await createImageBitmap(blob);
+  } catch (_) {
+    const url = URL.createObjectURL(blob);
+    try { const img = new Image(); img.src = url; await img.decode(); return img; }
+    finally { URL.revokeObjectURL(url); }
+  }
+}
+
+// Reads one File/Blob into a join source. Throws an Error whose message is for the tester.
+async function readPicture(file, origin) {
+  const label = origin === "paste" ? "The pasted picture"
+    : (file && file.name) ? "“" + file.name + "”" : "That picture";
+  if (!file || !file.size) throw new Error(label + " is empty.");
+  if (file.size > INGEST_MAX_BYTES) throw new Error(label + " is too big to join (over 100 MB).");
+  let head;
+  try { head = new Uint8Array(await file.slice(0, 65536).arrayBuffer()); }
+  catch (_) { throw new Error(label + " couldn't be read. If it's a folder, drop the picture inside it."); }
+  const kind = sniffImage(head);
+  if (kind === "pdf") throw new Error(label + " is a PDF. Join needs a picture: download the capture as PNG or JPG, then add it.");
+  if (kind === "svg" || kind === "heic" || !kind) throw new Error(label + " isn't a picture Join can use (PNG, JPG, WebP, GIF or BMP).");
+  let dims = imageSize(head, kind);
+  if (!dims && kind === "jpeg" && file.size > head.length) {
+    dims = imageSize(new Uint8Array(await file.slice(0, 4 * 1024 * 1024).arrayBuffer()), kind);
+  }
+  if (dims) checkPixels(dims.w, dims.h);        // refuse BEFORE decoding: a huge decode can crash the tab
+  // Copy the bytes into memory: a dropped File is read lazily from disk and throws once the
+  // file is moved or deleted, but the page is re-composed on every Swap / layout / undo.
+  const blob = new Blob([await file.arrayBuffer()], { type: PICTURE_MIME[kind] });
+  let bmp;
+  try { bmp = await decodeBlob(blob); } catch (_) { throw new Error(label + " couldn't be opened as a picture (the file may be damaged)."); }
+  const w = bmp.width || bmp.naturalWidth, h = bmp.height || bmp.naturalHeight;
+  try {
+    checkPixels(w, h);
+    let fp = null;
+    try { fp = fingerprint(bmp); } catch (_) {}
+    return { origin, blob, w, h, kind, name: (file && file.name) || "", fp };
+  } finally { if (bmp.close) bmp.close(); }
+}
+// A picture read from a file or the clipboard, as a join page. Its pixels are whatever the file
+// holds (a downloaded capture already has its URL bar and marks drawn in), so no live bar.
+function partFromPicture(p) {
+  return { src: p.blob, w: p.w, h: p.h, dpr: dpr || 1, origin: p.origin,
+    meta: { title: p.title || "Picture", url: p.url || "", env: null },
+    stampTime: p.stampTime ? new Date(p.stampTime) : null, barOn: false, barBaked: false, wasCropped: false,
+    capKey: null, srcEditorId: p.srcEditorId || null };
+}
+
+async function ingestFiles(files, origin) {
+  if (files.length > INGEST_MAX_FILES) { toast("Add up to " + INGEST_MAX_FILES + " pictures at a time."); return; }
+  ingestBusy = true;
+  try {
+    const pages = [], skipped = [];
+    for (const f of files) {
+      try {
+        const p = await readPicture(f, origin);
+        // The Downloads bubble lists the NEWEST file first - usually this tab's own download.
+        if (isOwnExport(p)) skipped.push("“" + (p.name || "That picture") + "” is this same image. Pick the other page's file.");
+        else pages.push(p);
+      } catch (err) { skipped.push(err.message || String(err)); }
+    }
+    if (!pages.length) { toast(skipped[0] || "Couldn't add that picture."); return; }
+    const host = hostTime();
+    for (const p of pages) Object.assign(p, fileOrder(p.name, host), { title: fileTitle(p.name) });
+    sortIncoming(pages);
+    const res = await joinPages(pages.map((p) => ({ part: partFromPicture(p), marks: [], orderTime: p.orderTime })), { via: origin });
+    joinResultToast(res, { via: origin, skipped, names: pages.map((p) => p.title) });
+  } catch (err) {
+    toast("Couldn't join: " + ((err && err.message) || err));
+  } finally { ingestBusy = false; }
+}
+
+async function ingestPaste(file) {
+  ingestBusy = true;
+  try {
+    const page = await readPicture(file, "paste");
+    const m = await matchCopy(page);
+    if (m && m.self) { toast("That's this same image."); return; }
+    const host = hostTime();
+    if (m) {
+      Object.assign(page, { origin: "paste-copy", title: m.title || "Pasted picture", url: m.url || "",
+        stampTime: m.stampTime || null, srcEditorId: m.editorId, orderTime: m.stampTime || host + 1 });
+    } else {
+      Object.assign(page, { title: "Pasted picture", orderTime: host + 1 });
+    }
+    const res = await joinPages([{ part: partFromPicture(page), marks: [], orderTime: page.orderTime }], { via: "paste" });
+    joinResultToast(res, { via: "paste", names: [page.title] });
+  } catch (err) {
+    toast(err.message || "Couldn't paste that picture.");
+  } finally { ingestBusy = false; }
+}
+
+/* ---- ordering a file by the time in its name ---- */
+// The editor's own name is "{title}-{date}" by default, where {date} is the DOWNLOAD date and
+// there is no time at all. Times that do appear: a {time} / Drive "-HHMMSS" right after the
+// date, Windows Snipping Tool's "Screenshot YYYY-MM-DD HHMMSS", and a clock the page itself put
+// in its title ("[11 04 22]" once ':' is sanitized). None is the capture clock, so a file's
+// order is a guess (the arrange bar's Swap fixes it in one click).
+function parseNameClock(name) {
+  const stem = String(name || "").replace(/\.[a-z0-9]{2,5}$/i, "").replace(/\s*\(\d+\)$/, "").replace(/-part\d+$/i, "");
+  const dates = [...stem.matchAll(/(?<!\d)(20\d\d)-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])(?!\d)/g)];
+  const d = dates.length ? dates[dates.length - 1] : null;
+  let clock = null, source = null;
+  // 1) a clock the page put in its own title ("[11 04 22]"): page-load time, so never LATER than
+  //    the capture - the safest signal for "this file is the earlier page".
+  const c = /[\[(]\s*(\d{1,2})[ .:_-](\d{2})[ .:_-](\d{2})\s*(?:([AaPp])\.?[Mm]\.?)?\s*[\])]/.exec(stem);
+  if (c) {
+    let hh = +c[1]; const ap = c[4] && c[4].toLowerCase();
+    if (ap === "p" && hh < 12) hh += 12; if (ap === "a" && hh === 12) hh = 0;
+    if (hh < 24 && +c[2] < 60 && +c[3] < 60) { clock = [hh, +c[2], +c[3]]; source = "title"; }
+  }
+  // 2) a time right after the date: Snipping Tool (capture time), or {time} / the Drive stamp
+  //    (download / upload time, so possibly later than the capture).
+  if (!clock && d) {
+    const t = /^(?:[-_ T]|\s+at\s+)([01]\d|2[0-3])[-_.: ]?([0-5]\d)[-_.: ]?([0-5]\d)(?!\d)/.exec(stem.slice(d.index + d[0].length));
+    if (t) { clock = [+t[1], +t[2], +t[3]]; source = "stamp"; }
+  }
+  return { date: d ? [+d[1], +d[2], +d[3]] : null, clock, source };
+}
+// { orderTime (ms), side: "before" | "after" } relative to hostMs.
+function fileOrder(name, hostMs) {
+  const p = parseNameClock(name);
+  const host = new Date(hostMs);
+  const day = p.date || [host.getFullYear(), host.getMonth() + 1, host.getDate()];
+  let t = null;
+  if (p.clock) t = new Date(day[0], day[1] - 1, day[2], p.clock[0], p.clock[1], p.clock[2]).getTime();
+  else if (p.date) {
+    const start = new Date(day[0], day[1] - 1, day[2]).getTime();
+    const hostStart = new Date(host.getFullYear(), host.getMonth(), host.getDate()).getTime();
+    if (start < hostStart) t = start + 86399000;     // an earlier day: before this page
+    else if (start > hostStart) t = start;           // a later day (this editor reopened an old capture)
+  }
+  if (t === null) t = hostMs - 1;                    // no usable time: before this page (usually the earlier page, downloaded)
+  return { orderTime: t, side: t < hostMs ? "before" : "after", nameClock: p.source };
+}
+function fileTitle(name) {
+  return String(name || "").replace(/\.[a-z0-9]{2,5}$/i, "").replace(/\s*\(\d+\)$/, "").replace(/-part\d+$/i, "")
+    .replace(/[-_ ]?(20\d\d)-(\d\d)-(\d\d)(?:[-_ ]\d{6})?$/, "").trim() || "Picture";
+}
+// Several files at once: by time, then natural name order (part2 before part10).
+function sortIncoming(pages) {
+  pages.sort((a, b) => (a.orderTime - b.orderTime) ||
+    String(a.name).localeCompare(String(b.name), undefined, { numeric: true, sensitivity: "base" }));
+}
+function hostTime() {
+  const s = stampTime || captureTime;
+  return s ? new Date(s).getTime() : Math.round(performance.timeOrigin || Date.now());
+}
+
+/* ---- recognising a paste of another editor's Copy ---- */
+// 32x32 luma of the picture. Size alone is useless (two visible captures on one monitor are
+// both 1912x966), so a paste must match both the size and this fingerprint.
+function fingerprint(src) {
+  const mid = document.createElement("canvas"); mid.width = 256; mid.height = 256;
+  const mc = mid.getContext("2d"); mc.imageSmoothingEnabled = true; mc.imageSmoothingQuality = "high";
+  mc.drawImage(src, 0, 0, 256, 256);
+  const fc = document.createElement("canvas"); fc.width = 32; fc.height = 32;
+  const cc = fc.getContext("2d"); cc.imageSmoothingEnabled = true; cc.imageSmoothingQuality = "high";
+  cc.drawImage(mid, 0, 0, 32, 32);
+  const d = cc.getImageData(0, 0, 32, 32).data, out = new Uint8Array(1024);
+  for (let i = 0; i < 1024; i++) out[i] = (d[i * 4] * 77 + d[i * 4 + 1] * 150 + d[i * 4 + 2] * 29) >> 8;
+  return out;
+}
+function fpDiff(a, b) {
+  if (!a || !b || a.length !== b.length) return Infinity;
+  let s = 0; for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]);
+  return s / a.length;
+}
+const fpToB64 = (fp) => btoa(String.fromCharCode.apply(null, Array.from(fp)));
+const fpFromB64 = (s) => { try { return Uint8Array.from(atob(s), (c) => c.charCodeAt(0)); } catch (_) { return null; } };
+
+// doDownload (one image, PNG/JPG) calls this with the canvas it exported.
+function recordOwnExport(canvas) {
+  try { ownExports = ownExports.concat([{ w: canvas.width, h: canvas.height, fp: fingerprint(canvas) }]).slice(-3); } catch (_) {}
+}
+function isOwnExport(p) {
+  // JPEG at q 0.4-1 moves 32x32 block means by well under 2 levels, so 2.5 still matches a JPG download
+  return !!p.fp && ownExports.some((x) => x.w === p.w && x.h === p.h && fpDiff(x.fp, p.fp) <= 2.5);
+}
+// doCopy calls this after a successful clipboard write. Kept in chrome.storage.session (not only
+// broadcast), because the tab that pastes is usually opened AFTER the Copy, and the copying tab
+// may already be closed.
+async function recordCopy(canvas) {
+  try {
+    const fp = fingerprint(canvas);
+    lastOwnCopy = { w: canvas.width, h: canvas.height, fp };
+    ownExports = ownExports.concat([lastOwnCopy]).slice(-3);
+    const s = await chrome.storage.session.get("fpcCopies");
+    const now = Date.now();
+    const list = ((s && s.fpcCopies) || []).filter((r) => now - r.at < COPY_TTL_MS && r.editorId !== editorId);
+    list.push({ editorId, w: canvas.width, h: canvas.height, fp: fpToB64(fp),
+      title: (meta && meta.title) || "", url: (meta && meta.url) || "", stampTime: hostTime(), at: now,
+      incognito: !!(meta && meta.incognito) });
+    await chrome.storage.session.set({ fpcCopies: list.slice(-COPY_KEEP) });
+  } catch (_) {}
+}
+async function matchCopy(page) {
+  const LIMIT = 2.5;                        // mean luma difference; a real match is ~0
+  if (!page.fp) return null;
+  if (lastOwnCopy && lastOwnCopy.w === page.w && lastOwnCopy.h === page.h && fpDiff(lastOwnCopy.fp, page.fp) <= LIMIT) return { self: true };
+  let list = [];
+  try { const s = await chrome.storage.session.get("fpcCopies"); list = (s && s.fpcCopies) || []; } catch (_) {}
+  const now = Date.now(), inc = !!(meta && meta.incognito);
+  let best = null, bestD = Infinity;
+  for (const r of list) {
+    if (now - r.at >= COPY_TTL_MS || r.w !== page.w || r.h !== page.h || !!r.incognito !== inc) continue;
+    const d = fpDiff(fpFromB64(r.fp), page.fp);
+    if (d < bestD || (d === bestD && best && r.at > best.at)) { best = r; bestD = d; }
+  }
+  if (!best || bestD > LIMIT) return null;
+  return best.editorId === editorId ? { self: true } : best;
+}
+
+// What a join from any source says when it is done. The arrange bar's action message (with its
+// Undo button) replaces this once the join UI is in.
+function joinResultToast(res, info) {
+  info = info || {};
+  if (!res || !res.ok) { if (res && res.reason && !res.cancelled) toast(res.reason); return; }
+  const skipped = (info.skipped || []).length;
+  toast("Joined " + (info.names && info.names.length ? info.names.join(", ") : "the page") + " — Ctrl+Z undoes it" +
+    (skipped ? " (" + skipped + " file" + (skipped > 1 ? "s" : "") + " skipped)" : ""));
+}
 
 async function onTile(tile) {
   if (aborted) return;
@@ -348,6 +753,8 @@ function finalize() {
   settleCapture();
   saveRecent();              // keep the last few captures so a closed tab isn't a lost capture
   syncProtection();          // an unexported capture must not be discarded
+  syncDocTitle();
+  rosterChanged(true);       // other editors can offer this capture for joining now
 }
 
 function updateDims() {
@@ -535,6 +942,7 @@ function swapSeg0(target) {
   seg.canvas = target;
   seg.ctx = target.getContext("2d");
   seg.height = target.height;
+  pixRev++;
 }
 
 function reflectInfoBarBtn() {
@@ -943,6 +1351,7 @@ function changeDoc(label, next, opts) {
     clearActiveAnnot();
     docDirty = true;
     renderAnnots(); maybeAnnot(); scheduleRecentSave(); markEdited();
+    syncDocTitle(); rosterChanged(true);
     return { ok: true, entry };
   };
   const fail = (reason) => {
@@ -1181,7 +1590,7 @@ function reflectFormat() {
 
 function wireTools() {
   window.addEventListener("resize", () => { if (zoom === null && segments.length) applyZoom(); });
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushRecentSave(); });
+  document.addEventListener("visibilitychange", () => { const hidden = document.visibilityState === "hidden"; if (hidden) flushRecentSave(); noteVisibility(hidden); });
   window.addEventListener("pagehide", flushRecentSave);
   window.addEventListener("beforeunload", onBeforeUnload);
   el("download").addEventListener("click", () => doDownload(currentFormat));
@@ -1376,8 +1785,10 @@ async function doDownload(fmt) {
     const ext = fmt === "jpg" ? "jpg" : "png";
     const q = fmt === "jpg" ? quality : undefined;
     if (segments.length === 1) {
-      const blob = await canvasToBlob(flatten(segments[0]), type, q);
+      const fc = flatten(segments[0]);
+      const blob = await canvasToBlob(fc, type, q);
       await saveBlob(blob, buildFilename(ext));
+      recordOwnExport(fc);
       toast("Saved " + ext.toUpperCase());
       markExported();
     } else {
@@ -1429,9 +1840,10 @@ async function downloadPdf() {
 
 async function doCopy() {
   try {
-    const blob = await canvasToBlob(flatten(segments[0]), "image/png");
+    const fc = flatten(segments[0]);
+    const blob = await canvasToBlob(fc, "image/png");
     await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-    if (segments.length === 1) markExported();   // "Copied first section" is not the whole capture
+    if (segments.length === 1) { markExported(); recordCopy(fc); }   // "Copied first section" is not the whole capture
     toast(segments.length > 1 ? "Copied first section" : "Copied to clipboard");
   } catch (e) {
     toast(/too large/.test(e.message || "") ? "Image too large to copy" : "Copy failed (browser blocked it)");
@@ -2686,6 +3098,7 @@ function restoreDoc(e, from, to) {
     maybeAnnot();
     scheduleRecentSave();
     markEdited();
+    syncDocTitle(); rosterChanged(true);
   };
   let r;
   try { r = applyDocState(e.doc); } catch (err) { to.pop(); from.push(e); toast("Couldn't undo that step"); return; }
@@ -2909,7 +3322,7 @@ function recentWriteJoined(id) {
               dpr: d.dpr, order: d.parts.map((p) => p.pid) },
     pages: d.parts.map((p) => ({ pid: p.pid, title: p.meta && p.meta.title, url: p.meta && p.meta.url,
       env: p.meta && p.meta.env, dpr: p.dpr, w: p.w, h: p.h, stampTs: p.stampTime ? +new Date(p.stampTime) : null,
-      barOn: !!p.barOn, barBaked: !!p.barBaked, label: p.label, origin: p.origin, wasCropped: !!p.wasCropped }))
+      barOn: !!p.barOn, barBaked: !!p.barBaked, label: p.label, origin: p.origin, wasCropped: !!p.wasCropped, capKey: p.capKey || null }))
   };
   const parts = d.parts;
   return recentQueue(async () => {
@@ -2968,7 +3381,7 @@ function saveRecent() {
         if (prior && !rowHeldElsewhere(prior.id) && prior.kind === "joined") {
           // A joined picture: reopen it whole. Detach FIRST - attached, restoreRecent's opening
           // flush would write this fresh, empty mark list over the joined row's marks.
-          if (currentRecentId === id) { currentRecentId = null; setTimeout(() => restoreRecent(prior.id), 0); }
+          if (currentRecentId === id) { currentRecentId = null; setTimeout(() => restoreRecent(prior.id, { reload: true }), 0); }
           return;
         }
         if (prior && !rowHeldElsewhere(prior.id)) {
@@ -3038,7 +3451,7 @@ async function openRecent() {
 function closeRecent() { const d = el("recentDrawer"); if (d) d.hidden = true; el("recentBtn").classList.remove("on"); }
 function toggleRecent() { el("recentDrawer").hidden ? openRecent() : closeRecent(); }
 
-async function restoreRecent(id) {
+async function restoreRecent(id, opts) {
   if (docBusy) { toast("One moment - still putting the picture back"); return; }
   if (jobId && !captureSettled) { toast("Wait for the current capture to finish, then reopen a recent one"); return; }
   let rec = null;
@@ -3046,7 +3459,7 @@ async function restoreRecent(id) {
   if (!rec) { toast("That capture is no longer available"); return; }
   if ((annotations.length || doc) && !confirm("Replace the current image? Annotations on it will be lost.")) return;
   flushRecentSave();          // the row being left keeps up to 1.5 s of pending edits
-  if (rec.kind === "joined" && rec.pages && rec.pages.length > 1) return restoreJoinedRecent(rec);
+  if (rec.kind === "joined" && rec.pages && rec.pages.length > 1) return restoreJoinedRecent(rec, opts);
   let bmp;
   try { bmp = await createImageBitmap(rec.blob); } catch (_) { toast("Couldn't load that capture"); return; }
 
@@ -3083,6 +3496,7 @@ async function restoreRecent(id) {
   // shift them down if the info bar is showing now).
   currentRecentId = rec.id;                   // further edits keep updating this row
   hostPid = "r" + rec.id; docDirty = false;
+  noteRestored(rec, opts);
   if (rec.annots && rec.annots.length) {
     annotations = cloneAnnots(rec.annots);
     if (infoBar) shiftAnnotList(annotations, infoBarHeight());
@@ -3293,6 +3707,7 @@ async function uploadToDrive() {
 
     const vis = shareAnyone ? (sharedPublic ? "public link" : "private — sharing failed") : "private";
     lastDriveLink = link;
+    sentToDrive = true; rosterChanged(true);
     // Reveal the "Copy link" button so the link can be re-copied at any time — even if
     // the auto-copy below fails (tab not focused) or the clipboard later gets overwritten
     // by a Ctrl+C / Copy (which puts the image on the clipboard, replacing this link).
@@ -3332,10 +3747,10 @@ async function uploadToDrive() {
 //     cannot drop it while the tester reproduces the bug. Exporting hands it back.
 function learnMyTab() {
   try {
-    chrome.tabs.getCurrent().then((t) => { myTabId = t ? t.id : null; syncProtection(); }, () => {});
+    chrome.tabs.getCurrent().then((t) => { myTabId = t ? t.id : null; myWindowId = t ? t.windowId : null; syncProtection(); rosterChanged(true); }, () => {});
   } catch (_) {}
 }
-function markEdited() { exportedClean = false; syncProtection(); }
+function markEdited() { exportedClean = false; syncProtection(); noteEdit(); }
 function markExported() { exportedClean = true; syncProtection(); }
 function openTextDraft() {
   const i = document.querySelector(".annot-text-input");
@@ -3393,13 +3808,14 @@ function rowHeldElsewhere(id) {
   } catch (_) { return false; }
 }
 // A joined Recent row comes back AS a joined picture: live pages, editable marks, Undo join.
-async function restoreJoinedRecent(rec) {
+async function restoreJoinedRecent(rec, opts) {
   const L = rec.layout || {};
   const order = L.order || rec.pages.map((p) => p.pid);
   const parts = order.map((pid) => rec.pages.find((p) => p.pid === pid)).filter(Boolean).map((pg) => ({
     pid: pg.pid, src: pg.jpeg, w: pg.w, h: pg.h, dpr: pg.dpr || 1, origin: pg.origin || "recent",
     meta: { title: pg.title, url: pg.url, env: pg.env }, stampTime: pg.stampTs ? new Date(pg.stampTs) : null,
-    barOn: !!pg.barOn, barBaked: !!pg.barBaked, label: pg.label, wasCropped: !!pg.wasCropped
+    barOn: !!pg.barOn, barBaked: !!pg.barBaked, label: pg.label, wasCropped: !!pg.wasCropped,
+    capKey: pg.capKey || null
   }));
   const hd = L.dpr || rec.dpr || 1;
   const d = { kind: "joined", dpr: hd, dir: L.dir || "row", matchHeights: L.matchHeights == null ? null : L.matchHeights,
@@ -3424,6 +3840,7 @@ async function restoreJoinedRecent(rec) {
   const saved = cloneAnnots(rec.annots || []);
   annotations = rec.rects ? remapAnnots(saved, rec.rects, pageRects()) : saved;
   currentRecentId = rec.id; docDirty = false;
+  noteRestored(rec, opts);
   captureTime = new Date(rec.ts);          // a restored capture: saveRecent and the join offer skip it
   stampTime = captureTime; lastJoinEntry = null;
   el("crop").disabled = false;
@@ -3505,6 +3922,7 @@ function showError(message, title) {
   tools.hidden = true;
   errorWrap.hidden = false;
   errorMsg.textContent = message || "Something went wrong.";
+  rosterChanged(true);
 }
 
 let toastTimer = null;
@@ -3527,4 +3945,454 @@ function toast(text) {
     t.classList.remove("show");
     setTimeout(() => (t.hidden = true), 250);
   }, 2200);
+}
+
+/* ------------------------- Editor roster (cross-tab) -------------------------
+ * Every open editor tab joins one same-origin BroadcastChannel, so a capture can be joined with
+ * the page captured in ANOTHER tab in one click. Nothing here needs a permission:
+ * BroadcastChannel is a plain web API; chrome.tabs.getCurrent / get / update / onRemoved and
+ * chrome.windows.update need none; storage is already declared.
+ *
+ * Messages (all carry v + from; `to` = addressed to one editor, everyone else drops it before
+ * touching the payload - a 'part' Blob reaches EVERY open editor):
+ *   who   {reqId}                     roll-call; every editor that has something answers 'here'
+ *   here  {card}                      a card, unsolicited on every change or as a roll-call answer
+ *   thumbReq {to} / thumb {to, capKey, rev, url}   thumbnails only for cards actually on screen
+ *                                     (all extension tabs share ONE renderer thread)
+ *   give  {to, reqId, capKey, at}     host asks one source for its page(s)
+ *   giving{to, reqId}                 source ack, sent BEFORE the PNG encode
+ *   part  {to, reqId, pages:[...]}    the hand-off (PNG Blob + meta + page-local marks)
+ *   giveFail {to, reqId, reason}
+ *   bye   {}                          pagehide
+ * Which pages a joined picture holds is state (card.pages), not an event: the source tab's
+ * "Joined into…" band follows it, so Undo join, a closed host or a Ctrl+Z need no message.
+ */
+const ROSTER_NAME = "fpc-editors", ROSTER_V = 1;
+const JOIN_WINDOW_MS = 20 * 60 * 1000;
+const ROLLCALL_MS = 400;
+const GIVE_ACK_MS = 2000;
+const GIVE_PART_MS = 15000;
+const GIVE_STALE_MS = 30000;
+const MIRROR_PREFIX = "fpcEd:", DISMISS_PREFIX = "fpcDis:";
+
+const editorId = rosterNewId();
+let rosterBc = null, myWindowId = null;
+let lastActive = Date.now(), editRev = 0, pixRev = 0;
+let sentToDrive = false;
+let restoredRecentId = null;     // this editor shows a capture reopened from Recent (not a reload)
+const peers = new Map();         // editorId -> card (+ seenAt)
+const pendingGives = new Map();  // reqId -> { reqId, peer, resolve, reject, timer, acked, onAck }
+let hereTimer = null;
+const handoffPngCache = new WeakMap();   // page canvas -> its PNG Blob (a canvas's pixels never change in place)
+let thumbCache = null;           // { key, url }
+const rosterListeners = new Set();   // UI hooks (badge, suggestion bar, source band)
+let rosterStarted = false;
+
+function rosterNewId() {
+  try { return crypto.randomUUID(); } catch (_) { return Date.now().toString(36) + Math.random().toString(36).slice(2, 10); }
+}
+function myCapKey() {
+  if (restoredRecentId != null) return "recent:" + restoredRecentId;
+  return jobId ? "job:" + jobId : null;
+}
+// The capture keys of the pages this editor shows: its own, plus every page joined into it.
+function myPages() {
+  if (doc) return doc.parts.map((p) => ({ k: p.pid === doc.hostPid ? myCapKey() : (p.capKey || null), title: p.label || pageLabel(p) }));
+  return [{ k: myCapKey(), title: (meta && meta.title) || "" }];
+}
+function myState() {
+  if (aborted) return "gone";
+  if (!captureSettled) return "capturing";
+  if (!meta || !segments.length || stage.hidden) return "empty";
+  return segments.length === 1 ? "ready" : "parts";
+}
+function pageKeyOf(url) {
+  try { const u = new URL(url); return u.origin + u.pathname + String(u.hash || "").split("?")[0]; }
+  catch (_) { return String(url || ""); }
+}
+function rosterThumb() {
+  // Never flatten() here: that allocates a full-size canvas (1912x16000 = 122 MB).
+  const src = segments[0] && segments[0].canvas;
+  if (!src) return "";
+  const key = editRev + ":" + pixRev + ":" + src.width + "x" + src.height;
+  if (thumbCache && thumbCache.key === key) return thumbCache.url;
+  const tw = 220, th = Math.min(400, Math.max(1, Math.round(src.height * tw / src.width)));
+  const sh = Math.min(src.height, src.width * th / tw);
+  const tc = document.createElement("canvas"); tc.width = tw; tc.height = th;
+  const g = tc.getContext("2d");
+  g.drawImage(src, 0, 0, src.width, sh, 0, 0, tw, th);
+  if (annotCanvas && annotations.length) {
+    exportingAnnots = true; renderAnnots();
+    g.drawImage(annotCanvas, 0, 0, src.width, sh, 0, 0, tw, th);
+    exportingAnnots = false; renderAnnots();
+  }
+  thumbCache = { key, url: tc.toDataURL("image/jpeg", 0.7) };
+  return thumbCache.url;
+}
+function myCard(withThumb) {
+  const st = myState();
+  const pages = myPages();
+  const own = pages.find((p) => p.k === myCapKey());
+  const c = {
+    editorId, capKey: myCapKey(), tabId: myTabId, windowId: myWindowId, state: st,
+    title: (meta && meta.title) || "", ownTitle: (own && own.title) || (meta && meta.title) || "",
+    url: (meta && meta.url) || "", pageKey: pageKeyOf(meta && meta.url),
+    stampTime: stampTime ? new Date(stampTime).getTime() : (captureTime ? new Date(captureTime).getTime() : null),
+    lastActive, rev: editRev, pixRev,
+    marks: annotations.length, w: segments[0] ? segments[0].canvas.width : 0,
+    h: segments.reduce((a, s) => a + s.canvas.height, 0), dpr, segs: segments.length,
+    pw: doc ? fullWpx : (baseSeg0 ? baseSeg0.width : 0), ph: doc ? fullHpx : (baseSeg0 ? baseSeg0.height : 0),
+    restored: restoredRecentId != null, sentToDrive, unsaved: hasUnsavedMarks(),
+    incognito: !!(meta && meta.incognito), pages: pages.map((p) => p.k)
+  };
+  if (withThumb && st === "ready") c.thumb = rosterThumb();
+  return c;
+}
+function rosterPost(m) {
+  if (!rosterBc) return false;
+  try { rosterBc.postMessage(Object.assign({ v: ROSTER_V, from: editorId }, m)); return true; }
+  catch (_) { return false; }          // DataCloneError / closed channel
+}
+function rosterEmit(what) { for (const fn of rosterListeners) { try { fn(what); } catch (_) {} } }
+
+// Called from init() right after wireTools(), before the no-job branch, so a ?recent=1 editor
+// that later reopens a capture joins too. Every chrome.tabs call is feature-checked: an
+// unguarded one crashed the whole editor in the test harness.
+function rosterInit() {
+  if (rosterStarted || typeof BroadcastChannel !== "function") return;
+  rosterStarted = true;
+  try { rosterBc = new BroadcastChannel(ROSTER_NAME); } catch (_) { rosterBc = null; return; }
+  if (typeof rosterBc.unref === "function") rosterBc.unref();   // Node (the test harness) only: never keeps the process alive
+  rosterBc.onmessage = (e) => { try { onRosterMsg(e.data); } catch (_) {} };
+  rosterBc.onmessageerror = () => {    // a payload this tab could not deserialize
+    for (const p of [...pendingGives.values()]) if (p.acked) settleGive(p, null, "clone");
+  };
+  try { if (chrome.tabs && chrome.tabs.onRemoved) chrome.tabs.onRemoved.addListener(onPeerTabRemoved); } catch (_) {}
+  try { document.addEventListener("resume", () => rosterChanged(true)); } catch (_) {}   // unfrozen: say so
+  try { window.addEventListener("pagehide", rosterBye); } catch (_) {}
+  rosterPost({ t: "who", reqId: rosterNewId(), wantThumb: false });
+}
+
+/* ---- suggestion bar: when to show, and its lifecycle (pure) ---- */
+function shouldSuggest(settings) {
+  // Only a FRESH capture offers a join: never one reopened from Recent, never an error page,
+  // never a capture saved in parts (Join is disabled there), and only with the setting on.
+  return !!jobId && restoredRecentId == null && !doc && myState() === "ready" && (settings || {}).joinSuggest !== false;
+}
+// state: { mode: "none"|"full"|"compact"|"closed", hiddenFor: null|"crop", shown: [capKey] }
+function suggestNext(s, ev) {
+  const live = s.mode === "full" || s.mode === "compact";
+  const closed = { mode: "closed", hiddenFor: null, shown: [] };
+  switch (ev.type) {
+    case "show":      return ev.cards.length ? { mode: ev.streak >= 3 ? "compact" : "full", hiddenFor: null, shown: ev.cards.map((c) => c.capKey) } : { mode: "none", hiddenFor: null, shown: [] };
+    case "export":    return s.mode === "full" ? Object.assign({}, s, { mode: "compact" }) : s;          // Download / Copy / PDF
+    case "drive":     return live ? closed : s;                                                          // filed
+    case "join":      return live ? closed : s;
+    case "dismiss":   return live ? closed : s;
+    case "dismissOne":
+    case "partnerGone": { if (!live) return s; const shown = s.shown.filter((k) => k !== ev.capKey); return shown.length ? Object.assign({}, s, { shown }) : closed; }
+    case "cropStart": return live ? Object.assign({}, s, { hiddenFor: "crop" }) : s;
+    case "cropEnd":   return s.hiddenFor === "crop" ? Object.assign({}, s, { hiddenFor: null }) : s;   // Apply or Cancel
+    case "restored":  return closed;                                                                     // content replaced
+  }
+  return s;
+}
+function rosterChanged(now) {
+  if (hereTimer) { clearTimeout(hereTimer); hereTimer = null; }
+  if (!rosterBc) return;
+  const go = () => {
+    hereTimer = null;
+    const c = myCard(false);
+    // An editor with nothing to offer (error page, empty ?recent=1 page) must not appear
+    // anywhere - and one that just failed withdraws what it announced while capturing.
+    if (c.state === "gone" || c.state === "empty") { rosterPost({ t: "bye" }); mirrorRemove(); return; }
+    rosterPost({ t: "here", card: c }); mirrorWrite(c);
+  };
+  if (now) go(); else hereTimer = setTimeout(go, 1000);
+}
+function noteEdit() { editRev++; lastActive = Date.now(); rosterChanged(false); }
+function noteVisibility(hidden) { lastActive = Date.now(); rosterChanged(hidden); }   // hidden: timers throttle, flush now
+function rosterBye() {
+  rosterPost({ t: "bye" });
+  mirrorRemove();
+  for (const p of [...pendingGives.values()]) settleGive(p, null, "closed");
+}
+
+// One key per editor: several tabs read-modify-writing ONE shared key lose each other's entries.
+function mirrorWrite(c) {
+  try {
+    const p = chrome.storage.session.set({ [MIRROR_PREFIX + editorId]: c || myCard(false) });
+    if (p && p.catch) p.catch(() => {});
+  } catch (_) {}
+}
+function mirrorRemove(id) {
+  try { const p = chrome.storage.session.remove(MIRROR_PREFIX + (id || editorId)); if (p && p.catch) p.catch(() => {}); } catch (_) {}
+}
+
+// A tab holds one editor at a time. The 'bye' a page posts while it unloads never arrives
+// (Chrome drops it - checked for close, reload and beforeunload), so a reloaded tab's new editor
+// replaces the old card here, and a closed tab goes via chrome.tabs.onRemoved.
+function upsertPeer(card) {
+  if (card.tabId != null) for (const [id, c] of [...peers]) if (id !== card.editorId && c.tabId === card.tabId) { dropPeer(id, true); mirrorRemove(id); }
+  peers.set(card.editorId, Object.assign({}, card, { seenAt: Date.now() }));
+  rosterEmit("peers");
+}
+function dropPeer(id, quiet) {
+  if (!peers.delete(id)) return;
+  for (const p of [...pendingGives.values()]) if (p.peer.editorId === id) settleGive(p, null, "closed");
+  if (!quiet) rosterEmit("peers");
+}
+function onPeerTabRemoved(tabId) {
+  for (const [id, c] of [...peers]) if (c.tabId === tabId) { dropPeer(id); mirrorRemove(id); }
+}
+
+function onRosterMsg(m) {
+  if (!m || m.v !== ROSTER_V || !m.from || m.from === editorId) return;
+  if (m.to && m.to !== editorId) return;
+  switch (m.t) {
+    case "who": {
+      const st = myState();
+      if (st !== "gone" && st !== "empty") rosterPost({ t: "here", reqId: m.reqId, card: myCard(!!m.wantThumb) });
+      return;
+    }
+    case "here": if (m.card && m.card.editorId === m.from) upsertPeer(m.card); return;
+    case "bye": dropPeer(m.from); return;
+    case "thumbReq": if (myState() === "ready") rosterPost({ t: "thumb", to: m.from, capKey: myCapKey(), rev: editRev, url: rosterThumb() }); return;
+    case "thumb": { const c = peers.get(m.from); if (c && c.capKey === m.capKey) { c.thumb = m.url; c.thumbRev = m.rev; rosterEmit("thumb"); } return; }
+    case "give": onGive(m); return;
+    case "giving": {
+      const p = pendingGives.get(m.reqId);
+      if (!p || p.peer.editorId !== m.from || p.acked) return;
+      p.acked = true; clearTimeout(p.timer);
+      p.timer = setTimeout(() => settleGive(p, null, "timeout"), GIVE_PART_MS);
+      if (p.onAck) { try { p.onAck(); } catch (_) {} }
+      return;
+    }
+    case "part": { const p = pendingGives.get(m.reqId); if (p && p.peer.editorId === m.from) settleGive(p, m, null); return; }
+    case "giveFail": { const p = pendingGives.get(m.reqId); if (p && p.peer.editorId === m.from) settleGive(p, null, m.reason || "failed"); return; }
+  }
+}
+
+/* ---- source side ---- */
+async function pagePng(src) {
+  if (typeof Blob !== "undefined" && src instanceof Blob) return src;      // a page that came as a Blob: send it as is
+  if (handoffPngCache.has(src)) return handoffPngCache.get(src);
+  const blob = await canvasToBlob(src, "image/png");
+  handoffPngCache.set(src, blob);
+  return blob;
+}
+// The pages this editor hands over, snapshotted synchronously (the picture can change during
+// the encode). A single capture is one page; a joined picture hands over EVERY page with the
+// marks that sit wholly on it (in its own page px), so it can be joined again elsewhere. A mark
+// crossing two of its pages stays behind.
+function handoffSnapshot() {
+  const t = stampTime || captureTime;
+  if (!doc) {
+    return [{ src: baseSeg0, capKey: myCapKey(), title: (meta && meta.title) || "", url: (meta && meta.url) || "",
+      env: (meta && meta.env) || null, dpr, stampTime: t ? new Date(t).getTime() : null,
+      barOn: !!(infoBar && !stampLocked), barBaked: !!stampLocked, wasCropped: !!wasCropped,
+      w: baseSeg0 ? baseSeg0.width : 0, h: baseSeg0 ? baseSeg0.height : 0,
+      annots: annotsForSave(), rev: editRev, pixRev, incognito: !!(meta && meta.incognito) }];
+  }
+  const rects = pageRects();
+  return doc.parts.map((p) => {
+    const r = rects.find((q) => q.pid === p.pid);
+    const mine = annotations.filter((a) => { const pg = pagesOfMark(a, rects); return pg.size === 1 && pg.has(p.pid); });
+    const local = { pid: p.pid, x: 0, y: 0, w: p.w, h: p.h, scale: 1, bx: 0, by: 0, bw: p.w, bh: p.h };
+    return { src: p.src, capKey: p.pid === doc.hostPid ? myCapKey() : (p.capKey || null),
+      title: (p.meta && p.meta.title) || p.label || "", url: (p.meta && p.meta.url) || "", env: (p.meta && p.meta.env) || null,
+      dpr: p.dpr || 1, stampTime: p.stampTime ? new Date(p.stampTime).getTime() : null,
+      barOn: !!p.barOn, barBaked: !!p.barBaked, wasCropped: !!p.wasCropped, w: p.w, h: p.h,
+      annots: r ? remapAnnots(cloneAnnots(mine), [r], [local]) : [], rev: editRev, pixRev,
+      incognito: !!(meta && meta.incognito) };
+  });
+}
+async function onGive(m) {
+  const fail = (reason) => rosterPost({ t: "giveFail", to: m.from, reqId: m.reqId, reason });
+  if (m.at && Date.now() - m.at > GIVE_STALE_MS) return;          // queued while frozen; the asker gave up
+  if (m.capKey !== myCapKey()) return fail("changed");            // this tab now shows another capture
+  const st = myState();
+  if (st !== "ready") return fail(st);
+  if (docBusy) return fail("busy");
+  rosterPost({ t: "giving", to: m.from, reqId: m.reqId });
+  commitOpenInput();                                              // a half-typed label goes with the page
+  cancelDrag();
+  const pages = handoffSnapshot();
+  try { for (const pg of pages) { pg.blob = await pagePng(pg.src); delete pg.src; } } catch (_) { return fail("encode"); }
+  if (!rosterPost({ t: "part", to: m.from, reqId: m.reqId, pages })) fail("clone");
+}
+
+/* ---- host side ---- */
+function settleGive(p, msg, err) {
+  if (!pendingGives.has(p.reqId)) return;
+  pendingGives.delete(p.reqId); clearTimeout(p.timer);
+  if (err) { const e = new Error(err); e.reason = err; p.reject(e); return; }
+  const pages = msg && Array.isArray(msg.pages) ? msg.pages : [];
+  const bad = !pages.length || pages.some((pg) => !(pg && pg.blob instanceof Blob && pg.blob.size > 0 && pg.w > 0 && pg.h > 0));
+  if (bad) { const e = new Error("empty"); e.reason = "empty"; p.reject(e); return; }
+  p.resolve(pages);
+}
+function requestPages(peer, opts) {
+  return new Promise((resolve, reject) => {
+    const reqId = rosterNewId();
+    const p = { reqId, peer, resolve, reject, acked: false, onAck: opts && opts.onAck };
+    pendingGives.set(reqId, p);
+    p.timer = setTimeout(() => { noAck(p); }, (opts && opts.ackMs) || GIVE_ACK_MS);
+    if (!rosterPost({ t: "give", to: peer.editorId, reqId, capKey: peer.capKey, at: Date.now() })) settleGive(p, null, "post");
+  });
+}
+function cancelPageRequests(peerId) {
+  for (const p of [...pendingGives.values()]) if (!peerId || p.peer.editorId === peerId) settleGive(p, null, "cancelled");
+}
+async function noAck(p) {
+  if (!pendingGives.has(p.reqId) || p.acked) return;
+  const why = await probeTab(p.peer.tabId);
+  settleGive(p, null, why);
+}
+async function probeTab(tabId) {
+  if (tabId == null || !(chrome.tabs && chrome.tabs.get)) return "noanswer";
+  try {
+    const t = await chrome.tabs.get(tabId);
+    if (!t) return "closed";
+    if (t.discarded) return "discarded";
+    if (t.frozen) return "asleep";
+    return "noanswer";
+  } catch (_) { return "closed"; }
+}
+async function goToTab(tabId) {
+  // Look the window up NOW: a tab dragged to another window keeps its id, not its windowId.
+  const t = await chrome.tabs.get(tabId);
+  if (t.discarded) { const e = new Error("discarded"); e.reason = "discarded"; throw e; }   // activating reloads it
+  await chrome.tabs.update(tabId, { active: true });
+  if (chrome.windows && chrome.windows.update) await chrome.windows.update(t.windowId, { focused: true });
+  return t;
+}
+function waitForHere(id, ms) {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const fn = (what) => { const c = peers.get(id); if (what === "peers" && c && c.seenAt >= start) { done(); resolve(c); } };
+    const done = () => { rosterListeners.delete(fn); clearTimeout(tm); };
+    const tm = setTimeout(() => { done(); const e = new Error("noanswer"); e.reason = "noanswer"; reject(e); }, ms);
+    rosterListeners.add(fn);
+  });
+}
+async function wakeAndRequest(peer) {
+  const s = await probeTab(peer.tabId);
+  if (s !== "asleep") { const e = new Error(s); e.reason = s; throw e; }   // never activate a discarded tab
+  const back = myTabId;
+  const woke = waitForHere(peer.editorId, 5000);
+  await goToTab(peer.tabId);
+  rosterPost({ t: "who", reqId: rosterNewId(), wantThumb: false });     // in case 'resume' did not fire
+  await woke;
+  return requestPages(peer, { onAck: () => { if (back != null) goToTab(back).catch(() => {}); } });
+}
+function requestThumb(peer) {
+  // Only for the 1-2 cards on screen (and drawer rows as they render); the answer lands in peers.
+  const c = peers.get(peer.editorId);
+  if (c && c.thumb && c.thumbRev === c.rev) return false;
+  return rosterPost({ t: "thumbReq", to: peer.editorId });
+}
+// What the tester reads when another tab's page could not be fetched.
+function giveMessage(reason, peer) {
+  const name = (peer && (peer.ownTitle || peer.title)) || "That capture";
+  switch (reason) {
+    case "closed": return name + "'s tab closed before it could send its picture. Pick another or add a file.";
+    case "asleep": return name + "'s tab is asleep. Wake it, then try again.";
+    case "discarded": return "The browser closed " + name + "'s tab to free memory, so its picture is gone. Use its downloaded file or capture it again.";
+    case "changed": return "That tab now shows a different capture.";
+    case "capturing": return name + " is still capturing. Try again in a moment.";
+    case "busy": return name + " is busy. Try again in a moment.";
+    case "cancelled": return null;
+    default: return "Couldn't get " + name + "'s picture. Try again, or add its file.";
+  }
+}
+function partFromPage(pg, peer) {
+  return { src: pg.blob, w: pg.w, h: pg.h, dpr: pg.dpr || 1, origin: "tab",
+    meta: { title: pg.title || "", url: pg.url || "", env: pg.env || null },
+    stampTime: pg.stampTime ? new Date(pg.stampTime) : null, barOn: !!pg.barOn, barBaked: !!pg.barBaked,
+    wasCropped: !!pg.wasCropped, capKey: pg.capKey || null, srcEditorId: peer ? peer.editorId : null };
+}
+// Join another open editor's page(s) into this capture. One retry when the source is merely slow
+// to answer (all editors share one thread); an asleep tab is reported so the UI can offer Wake.
+async function joinFromPeer(peer, opts) {
+  opts = opts || {};
+  const why = joinBlockedReason();
+  if (why) return { ok: false, reason: why };
+  if (!!peer.incognito !== !!(meta && meta.incognito)) return { ok: false, reason: "An incognito capture can only be joined with another incognito capture." };
+  let pages;
+  try {
+    pages = opts.wake ? await wakeAndRequest(peer) : await requestPages(peer, { onAck: opts.onAck });
+  } catch (e) {
+    let reason = e && e.reason;
+    if (reason === "noanswer" && !opts.wake) {
+      try { pages = await requestPages(peer, { ackMs: 5000, onAck: opts.onAck }); reason = null; } catch (e2) { reason = e2 && e2.reason; }
+    }
+    if (reason === "closed") { dropPeer(peer.editorId); mirrorRemove(peer.editorId); }
+    if (reason) return { ok: false, reason: giveMessage(reason, peer), code: reason, cancelled: reason === "cancelled" };
+  }
+  const incoming = pages.map((pg) => ({ part: partFromPage(pg, peer), marks: pg.annots || [], orderTime: pg.stampTime }));
+  return joinPages(incoming, { via: "tab" });
+}
+
+/* ---- who to offer (pure) ---- */
+function joinCandidates(list, me, now, dismissed) {
+  const isJoined = (c) => Array.isArray(c.pages) && c.pages.length > 1;
+  const hostOf = new Map();
+  for (const c of list) if (isJoined(c)) for (const k of c.pages) if (k !== c.capKey) hostOf.set(k, c);
+  const ok = (c) => c && c.state === "ready" && c.segs === 1 && c.capKey && c.capKey !== me.capKey &&
+    !(me.pages || []).includes(c.capKey) && !c.sentToDrive && !dismissed.has(c.capKey) &&
+    !!c.incognito === !!me.incognito && now - (c.lastActive || 0) <= JOIN_WINDOW_MS;
+  const out = [], seen = new Set();
+  for (const c of list) {
+    const shown = hostOf.get(c.capKey) || c;     // a page inside another open joined image is shown as that image
+    if (!ok(shown) || (!ok(c) && shown === c)) continue;
+    if (shown.editorId === me.editorId || seen.has(shown.editorId)) continue;
+    seen.add(shown.editorId); out.push(shown);
+  }
+  out.sort((a, b) => ((a.pageKey === me.pageKey) - (b.pageKey === me.pageKey)) || ((b.lastActive || 0) - (a.lastActive || 0)));
+  return { cards: out, preselect: out.length === 1 ? out[0] : null };
+}
+// Every other ready editor this capture could take a page from (the Join drawer / badge): no
+// 20-minute window and no dismissals here - the tester is asking.
+function joinablePeers() {
+  const me = myCard(false);
+  return [...peers.values()].filter((c) => c.editorId !== editorId && c.capKey && c.capKey !== me.capKey &&
+    !(me.pages || []).includes(c.capKey) && !!c.incognito === !!me.incognito && c.state !== "gone" && c.state !== "empty")
+    .sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0));
+}
+function sourceBandHost() {
+  const me = myCapKey();
+  if (!me) return null;
+  let best = null;
+  for (const c of peers.values()) {
+    if (c.editorId === editorId || !Array.isArray(c.pages) || c.pages.length < 2 || !c.pages.includes(me)) continue;
+    if (!best || (c.lastActive || 0) > (best.lastActive || 0)) best = c;
+  }
+  return best;
+}
+async function loadDismissed() {
+  try {
+    const all = (await chrome.storage.session.get(null)) || {};
+    return new Set(Object.keys(all).filter((k) => k.startsWith(DISMISS_PREFIX)).map((k) => k.slice(DISMISS_PREFIX.length)));
+  } catch (_) { return new Set(); }
+}
+async function rollCall(ms) {
+  const reqId = rosterNewId();
+  rosterPost({ t: "who", reqId, wantThumb: false });   // cards only: every editor shares one renderer thread
+  await new Promise((r) => setTimeout(r, ms == null ? ROLLCALL_MS : ms));
+  return [...peers.values()];
+}
+// The tab strip shows the page's name instead of "Full Page Capture" for every editor, so "the
+// Details Report tab" in the Join messages is a tab the tester can find.
+function syncDocTitle() {
+  try { document.title = ((meta && meta.title) || "Capture") + " - Full Page Capture"; } catch (_) {}
+}
+
+// A capture reopened from Recent is a different capture for the roster (capKey recent:<id>), and
+// never offers a join itself. A reload that brought its own joined picture back keeps its key.
+function noteRestored(rec, opts) {
+  if (!(opts && opts.reload)) restoredRecentId = rec.id;
+  editRev++; pixRev++;
+  syncDocTitle();
+  rosterChanged(true);
 }

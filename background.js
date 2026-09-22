@@ -841,7 +841,7 @@ async function tiledCapture(o) {
 
   return openResult(jobId, {
     meta: {
-      mode, title: tab.title || "screenshot", url: tab.url,
+      mode, title: tab.title || "screenshot", url: tab.url, incognito: !!tab.incognito,
       dpr, clientW, clientH, fullW, fullH, scrollbarLeft: !!scrollbarLeft, region,
       containerOffset,
       env: { ua: metrics.ua, vw: metrics.vw, vh: metrics.vh, dpr, loadMs: metrics.loadMs }
@@ -889,7 +889,7 @@ async function runCapture(tab, mode, delay) {
       const m = (await exec(fpcVisibleMeta)) || { clientW: 0, clientH: 0, dpr: 1 };
       setBadge("");
       return openResult(jobId, {
-        meta: { mode: "visible", title: tab.title || "screenshot", url: tab.url, dpr: m.dpr,
+        meta: { mode: "visible", title: tab.title || "screenshot", url: tab.url, incognito: !!tab.incognito, dpr: m.dpr,
           env: m.ua ? { ua: m.ua, vw: m.vw, vh: m.vh, dpr: m.dpr, loadMs: m.loadMs } : undefined },
         tiles: [{ dataUrl, x: 0, y: 0 }]
       });
@@ -921,7 +921,7 @@ async function runCapture(tab, mode, delay) {
         setBadge("");
         return openResult(jobId, {
           meta: {
-            mode: "region", title: tab.title || "screenshot", url: tab.url, dpr: sel.dpr,
+            mode: "region", title: tab.title || "screenshot", url: tab.url, incognito: !!tab.incognito, dpr: sel.dpr,
             clientW: sel.vw, clientH: sel.vh, fullW: sel.vw, fullH: sel.vh, scrollbarLeft: false,
             region: { x: sel.x, y: sel.y, w: sel.w, h: sel.h },
             env: m.ua ? { ua: m.ua, vw: m.vw, vh: m.vh, dpr: m.dpr, loadMs: m.loadMs } : undefined
