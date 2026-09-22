@@ -127,9 +127,55 @@
       • <b style="color:var(--text)">Size বা Quality slider</b> ছোঁয়ার পরেও Ctrl+Z, Ctrl+S আর tool key (R, A, B…) কাজ করে। Label লেখার মাঝে Ctrl+S চাপলে label-সহ save হয়।<br>
       • আঁকা বা কোনো shape সরানোর সময় stage-এর <b style="color:var(--text)">কিনারায় নিয়ে গেলে stage নিজে scroll হয়</b> — লম্বা পাতার নিচ পর্যন্ত তীর টানা যায়।<br>
       • দাগ দেওয়া capture Download / Copy / Drive না করে বন্ধ করতে গেলে browser <b style="color:var(--text)">“Leave site?”</b> জিজ্ঞেস করে। (Print এতে গোনা হয় না।)<br>
-      • কোনো ছবি ভুল করে editor-এ টেনে ছাড়লে এখন আর browser-এ খুলে যায় না।<br>
+      • কোনো ছবি editor-এ টেনে ছাড়লে সেটা এখন <b style="color:var(--text)">এই capture-এর সাথে জুড়ে যায়</b> (নিচে Join দেখুন) — browser-এ খুলে গিয়ে capture হারায় না।<br>
+      • <b style="color:var(--text)">Crop-ও এখন Ctrl+Z দিয়ে ফেরানো যায়।</b> URL bar on/off করলে capture-এর সময় আর বদলায় না।<br>
+      • Editor tab-এর নামে এখন পাতার নাম দেখায় — অনেকগুলো capture খোলা থাকলে খুঁজে পাওয়া সহজ।<br>
       • উপরে <b style="color:var(--text)">URL + time bar</b> বসে (চাইলে toggle) — সাথে <i>Browser · OS · Viewport · DPR</i> লাইন, bug report-এর জন্য পারফেক্ট।<br>
       • Export: <b style="color:var(--text)">PNG / JPG / PDF</b> · Copy to clipboard · Print. <span style="color:var(--text)">PDF-এ URL-টা clickable থাকে।</span>
+    </div>
+  </div>
+
+  <!-- ── JOIN ─────────────────────────────────────────── -->
+  <h2><span class="em">🧩</span> দুই পাতা এক ছবিতে — Join <span class="tag">NEW</span></h2>
+  <p class="hint">একটা bug দেখাতে দুটো পাতা লাগলে (এখানে data দেখুন → ওখানে গিয়ে bug হয়) আর অন্য app-এ হাতে জোড়া লাগাতে হবে না।</p>
+  <div class="card pad">
+    <ol class="steps">
+      <li>প্রথম পাতা (A) capture করে দাগ দিন। Tab-টা <b>খোলা রাখুন</b> — download করে রাখলেও সমস্যা নেই।</li>
+      <li>দ্বিতীয় পাতা (B) capture করুন। B-র editor খুললেই toolbar-এর নিচে একটা সরু bar আসবে: <b>“Join with Mentor Dashboard?”</b> — পাশে লেখা থাকে কোন tab, কখন capture, কয়টা দাগ। Bar আঁকার পথ আটকায় না।</li>
+      <li><b>Join side by side</b> চাপুন। যেটা আগে capture করেছেন সেটা বাঁয়ে, পরেরটা ডানে; দুই URL bar এক সারিতে, মাঝে ধূসর ফাঁক।</li>
+      <li>দুই পাতা জুড়ে arrow টানুন বা দাগ ঠিক করুন — সব দাগ এখনও বদলানো যায়। তারপর <b>Download</b> বা <b>Send to Drive</b>। File-এর নামে দুই পাতার নামই থাকে — Download-এর উপর mouse রাখলে নামটা আগেই দেখা যায়।</li>
+    </ol>
+    <div class="callout">
+      <b>ভুল হলে?</b> জোড়ার সাথে সাথে <b>Ctrl+Z</b>, বা নিচের message-এর <b>Undo join</b>। পরে যেকোনো সময় উপরের bar-এর <b>Undo join</b> চাপলে অন্য পাতাটা সরে যায়, এই পাতার দাগ থেকে যায়। Page A-র নিজের tab কখনো বদলায় না — সেখানে শুধু লেখা আসে কোন tab-এ জুড়েছে, সাথে <b>Go there</b>।
+    </div>
+  </div>
+
+  <h2 style="font-size:16px; margin-top:26px;">Arrange bar — জোড়ার পরে সাজানো</h2>
+  <div class="card pad">
+    <table>
+      <tr><td class="k">Side by side / One under the other</td><td class="v">পাশাপাশি বা উপর-নিচে; শেষবার যেটা বেছেছিলেন পরের join-এ সেটাই আসে।</td></tr>
+      <tr><td class="k">⇄ Swap</td><td class="v">দুই পাতার জায়গা বদল — দাগ নিজের পাতার সাথেই যায়।</td></tr>
+      <tr><td class="k">Match heights</td><td class="v">একটা পাতা অন্যটার দেড় গুণের বেশি লম্বা হলে নিজে থেকেই চালু: লম্বা পাতাটা কেটে উচ্চতা মেলায়, নিচে <i>“▼ … continues below (cut to fit)”</i> লেখা থাকে — download করা ছবিতেও। কোনো দাগ কাটা পড়ে না; tick তুলে দিলে পুরো পাতা ফেরত।</td></tr>
+      <tr><td class="k">Step ①②③</td><td class="v">দুই পাতা জুড়ে নম্বর একটানা চলে: A-র ①② আর B-র ①② হয়ে যায় ①②③④ — bar-এ লেখা থাকে।</td></tr>
+      <tr><td class="k">Page chip ① ②</td><td class="v">Click করলে ওই পাতায় zoom হয় — arrow টানতে সুবিধা; <b>Fit</b> (<span class="kbd">0</span>) চাপলে আবার পুরো ছবি। ৩ বা বেশি পাতায় ◂ ▸ দিয়ে ক্রম বদল, × দিয়ে একটা পাতা সরানো।</td></tr>
+      <tr><td class="k">URL bar button</td><td class="v">জোড়া ছবিতে প্রতি পাতার URL bar আলাদা করে on/off করা যায়।</td></tr>
+      <tr><td class="k">Hide</td><td class="v">Bar ছোট করে এক লাইনে রাখে — Swap আর Undo join সেখানেও থাকে।</td></tr>
+    </table>
+    <div class="callout">
+      প্রতিটা বদল (Swap, layout, Match heights, URL bar) আলাদা এক ধাপ — <b>Ctrl+Z</b> দিয়ে ফেরানো যায়।
+    </div>
+  </div>
+
+  <h2 style="font-size:16px; margin-top:26px;">Page A-র tab বন্ধ হয়ে গেলে</h2>
+  <div class="card pad">
+    <table>
+      <tr><td class="k">Join button বা <span class="kbd">J</span></td><td class="v">Toolbar-এ Crop-এর পাশে; খোলা সব capture-এর list দেখায়, যেটায় click করবেন সেটা জুড়ে যায়। কয়েকটায় tick দিয়ে <b>Join selected</b>। Button-এর কোণের সংখ্যা = কয়টা capture জোড়ার জন্য তৈরি।</td></tr>
+      <tr><td class="k">Download করা file</td><td class="v">File-টা editor-এর যেকোনো জায়গায় টেনে এনে ছাড়ুন, বা Join → <b>Choose image file…</b> (PNG, JPG, WebP, GIF, BMP)</td></tr>
+      <tr><td class="k"><span class="kbd">Ctrl+V</span></td><td class="v">Clipboard-এর ছবি নতুন পাতা হিসেবে জোড়ে — Snipping Tool, chat-এর ছবি, বা অন্য editor-এর <b>Copy</b>। অন্য editor-এর Copy হলে আসল পাতার নাম আর সময় চিনে নেয়।</td></tr>
+      <tr><td class="k">Recent</td><td class="v">Settings-এ <b>Keep recent captures</b> চালু থাকলে Join-এর list-এ আসে (একটু নরম JPEG কপি)। জোড়া ছবি Recent-এ নতুন ঘর নেয় না — যে capture-এ জুড়েছেন তার ঘরেই থাকে, আর Recent থেকে খুললে জোড়া অবস্থাতেই খোলে।</td></tr>
+    </table>
+    <div class="callout star">
+      <b>যা হবে না:</b> খুব লম্বা capture (কয়েক ভাগে save হয়) জোড়া যায় না — <b>Capture area</b> (Alt+Shift+A) দিয়ে শুধু দরকারি অংশটা নিয়ে জুড়ুন। Bar-এর <b>×</b> চাপলে ওই পাতার প্রস্তাব আর আসবে না, তবে Join button সবসময় থাকে। প্রস্তাব একদম বন্ধ করতে: Settings → <i>Suggest joining when you capture a second page</i>।
     </div>
   </div>
 
@@ -177,6 +223,8 @@
       <tr><td class="k">Smooth scroll animation</td><td class="v">capture-এর সময় মসৃণভাবে scroll (extra সময় লাগে না)</td></tr>
       <tr><td class="k">URL &amp; time bar</td><td class="v">উপরে page URL + capture date/time — bug report-এ দারুণ</td></tr>
       <tr><td class="k">Environment info</td><td class="v">২য় লাইনে Browser · OS · Viewport · DPR</td></tr>
+      <tr><td class="k">Suggest joining…</td><td class="v">দ্বিতীয় পাতা capture করলে গত ২০ মিনিটে কাজ করা, এখনো খোলা capture জোড়ার প্রস্তাব দেয় (Drive-এ পাঠানোগুলো বাদে)। default ON</td></tr>
+      <tr><td class="k">Keep recent captures</td><td class="v">শেষ ৩টা capture (দাগসহ) এই PC-তে রাখে, ভুলে tab বন্ধ করলেও ফেরত পাওয়া যায়। default OFF; বন্ধ করলে রাখা সব মুছে যায়</td></tr>
       <tr><td class="k">Hide sticky / fixed elements</td><td class="v">floating header / cookie bar বারবার repeat হওয়া আটকায়</td></tr>
       <tr><td class="k">File name template</td><td class="v">tokens: <code>{title}</code> <code>{date}</code> <code>{time}</code> <code>{host}</code></td></tr>
       <tr><td class="k">Target Drive folder ⭐</td><td class="v">আপনার নিজের Drive folder-এর URL/ID (খালি = Drive root)</td></tr>

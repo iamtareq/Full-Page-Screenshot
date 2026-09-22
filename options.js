@@ -8,6 +8,7 @@ const DEFAULTS = {
   infoBar: true,
   envBar: true,
   recentEnabled: false,          // opt-in: nothing is kept on disk until the user asks for it
+  joinSuggest: true,             // the editor offers to join a page captured just before
   filenameTemplate: "{title}-{date}",
   driveClientId: "",
   driveFolderId: "",
@@ -24,6 +25,7 @@ const els = {
   infoBar: document.getElementById("infoBar"),
   envBar: document.getElementById("envBar"),
   recentEnabled: document.getElementById("recentEnabled"),
+  joinSuggest: document.getElementById("joinSuggest"),
   filenameTemplate: document.getElementById("filenameTemplate"),
   driveClientId: document.getElementById("driveClientId"),
   driveFolderId: document.getElementById("driveFolderId"),
@@ -86,6 +88,7 @@ async function load() {
   els.infoBar.checked = cfg.infoBar;
   els.envBar.checked = cfg.envBar;
   els.recentEnabled.checked = !!cfg.recentEnabled;
+  els.joinSuggest.checked = cfg.joinSuggest !== false;
   els.filenameTemplate.value = cfg.filenameTemplate;
   els.driveClientId.value = cfg.driveClientId || "";
   els.driveFolderId.value = cfg.driveFolderId || "";
@@ -112,6 +115,7 @@ async function save() {
     infoBar: els.infoBar.checked,
     envBar: els.envBar.checked,
     recentEnabled: els.recentEnabled.checked,
+    joinSuggest: els.joinSuggest.checked,
     filenameTemplate: els.filenameTemplate.value.trim() || DEFAULTS.filenameTemplate,
     driveClientId: els.driveClientId.value.trim(),
     driveFolderId: els.driveFolderId.value.trim(),

@@ -429,7 +429,7 @@ function imageSize(b, kind) {
 function checkPixels(w, h) {
   if (!(w > 0 && h > 0)) throw new Error("That picture couldn't be read.");
   if (w > MAX_SIDE || h > MAX_SIDE || w * h > JOIN_MAX_PX) {
-    throw new Error("That picture is too large to join (" + w + "×" + h + "). Capture just the part you need with Area (Alt+Shift+A), then join it.");
+    throw new Error("That picture is too large to join (" + w + "×" + h + "). Capture just the part you need with " + areaHint() + ", then join it.");
   }
 }
 async function decodeBlob(blob) {
@@ -646,15 +646,6 @@ async function matchCopy(page) {
   return best.editorId === editorId ? { self: true } : best;
 }
 
-// What a join from any source says when it is done. The arrange bar's action message (with its
-// Undo button) replaces this once the join UI is in.
-function joinResultToast(res, info) {
-  info = info || {};
-  if (!res || !res.ok) { if (res && res.reason && !res.cancelled) toast(res.reason); return; }
-  const skipped = (info.skipped || []).length;
-  toast("Joined " + (info.names && info.names.length ? info.names.join(", ") : "the page") + " — Ctrl+Z undoes it" +
-    (skipped ? " (" + skipped + " file" + (skipped > 1 ? "s" : "") + " skipped)" : ""));
-}
 
 async function onTile(tile) {
   if (aborted) return;
@@ -755,6 +746,7 @@ function finalize() {
   syncProtection();          // an unexported capture must not be discarded
   syncDocTitle();
   rosterChanged(true);       // other editors can offer this capture for joining now
+  maybeSuggestJoin();        // ...and this one may offer the page captured just before
 }
 
 function updateDims() {
@@ -800,6 +792,14 @@ function reflectStatus(w, h) {
     t.textContent = s;
     t.title = s;
   }
+  const pc = el("pageChip");
+  if (pc) {
+    pc.hidden = !doc;
+    if (doc) {
+      pc.textContent = doc.parts.length + " pages";
+      pc.title = doc.parts.map((p, i) => pageNo(i) + " " + pageLabel(p) + (p.stampTime ? " · " + fmtClock(p.stampTime) : "")).join("\n");
+    }
+  }
   if (w === undefined) {
     w = segments[0] ? segments[0].canvas.width : fullWpx;
     h = segments.reduce((a, s) => a + s.canvas.height, 0);
@@ -813,7 +813,7 @@ function reflectStatus(w, h) {
     if (segments.length > 1) bits.push(segments.length + " parts");
     if (wasCropped) bits.push("cropped");
     if (truncated) bits.push("width truncated");
-    p.textContent = bits.length ? bits.join(" · ") : "1 section";
+    p.textContent = doc ? statusPartsFor() : (bits.length ? bits.join(" · ") : "1 section");
   }
 }
 
@@ -948,6 +948,12 @@ function swapSeg0(target) {
 function reflectInfoBarBtn() {
   const btn = el("infobar");
   if (!btn) return;
+  if (doc) {
+    btn.disabled = false;
+    btn.classList.toggle("on", doc.parts.some((p) => p.barOn && !p.barBaked));
+    btn.title = "URL bar on each page…";
+    return;
+  }
   const disabled = stampLocked || segments.length !== 1;
   btn.classList.toggle("on", infoBar);
   btn.disabled = disabled;
@@ -973,7 +979,8 @@ function shiftAnnotations(dy) {
 }
 
 function toggleInfoBar() {
-  if (doc || stampLocked || segments.length !== 1 || docBusy) return;   // joined: the per-page bar menu handles it
+  if (doc) { toggleBarMenu(); return; }   // joined: one bar per page, in a menu
+  if (stampLocked || segments.length !== 1 || docBusy) return;
   const barH = infoBarHeight();
   const turningOn = !infoBar;
   infoBar = !infoBar;
@@ -1351,7 +1358,7 @@ function changeDoc(label, next, opts) {
     clearActiveAnnot();
     docDirty = true;
     renderAnnots(); maybeAnnot(); scheduleRecentSave(); markEdited();
-    syncDocTitle(); rosterChanged(true);
+    syncDocTitle(); rosterChanged(true); renderBands();
     return { ok: true, entry };
   };
   const fail = (reason) => {
@@ -1370,7 +1377,7 @@ function changeDoc(label, next, opts) {
 function joinBlockedReason() {
   if (jobId && !captureSettled) return "Wait for the capture to finish, then join.";
   if (aborted || !meta || !segments.length) return "Open a capture first, then join another page to it.";
-  if (segments.length !== 1) return "This capture is too long to join (saved in " + segments.length + " parts). Capture just the part you need with Area (Alt+Shift+A), then join it.";
+  if (segments.length !== 1) return "This capture is too long to join (saved in " + segments.length + " parts). Capture just the part you need with " + areaHint() + ", then join it.";
   if (cropping) return "Finish or cancel the crop first.";
   if (docBusy) return "Still putting the pages together…";
   return null;
@@ -1415,7 +1422,7 @@ async function joinPages(incoming, opts) {
   }
   if (!L.fits) {                                                    // cut long pages, never above a mark
     const cuts = cutToFit(next, { hostDpr: dpr, markFloor: floor });
-    if (!cuts) return { ok: false, reason: "These pages are too long to join. Capture just the part you need with Area (Alt+Shift+A), then join." };
+    if (!cuts) return { ok: false, reason: "These pages are too long to join. Capture just the part you need with " + areaHint() + ", then join." };
     next = make(next.dir, cuts);
   }
   const incomingMarks = added.filter((a) => a.marks.length)
@@ -1636,6 +1643,7 @@ function wireTools() {
   } catch (_) {}
   el("infobar").addEventListener("click", toggleInfoBar);
   el("crop").addEventListener("click", startCrop);
+  wireJoinUI();
   el("cropApply").addEventListener("click", applyCrop);
   el("cropCancel").addEventListener("click", () => { endCrop(); maybeAnnot(); });
 
@@ -1661,10 +1669,14 @@ function wireTools() {
       }
       return;
     }
+    // Only what can be open is closed: the bar menu exists on a joined picture, the Join drawer
+    // once the toolbar shows - a Recent-only page's Esc still reaches the Recent drawer.
+    if (e.key === "Escape" && doc && el("barMenu") && !el("barMenu").hidden) { closeBarMenu(); return; }
+    if (e.key === "Escape" && !tools.hidden && el("joinDrawer") && !el("joinDrawer").hidden) { closeJoin(true); return; }
     if (e.key === "Escape" && el("recentDrawer") && !el("recentDrawer").hidden) { closeRecent(); return; }
     // Delete in the Recent drawer (a card focused) must not erase the live
     // shape hidden behind it.
-    if ((e.key === "Delete" || e.key === "Backspace") && t && t.closest && t.closest("#recentDrawer")) return;
+    if ((e.key === "Delete" || e.key === "Backspace") && t && t.closest && (t.closest("#recentDrawer") || t.closest("#joinDrawer"))) return;
     // No image on screen yet (still stitching, the error card, the Recent-only
     // page): a key must not save, print or copy the half-drawn canvas behind it.
     if (tools.hidden) {
@@ -1689,6 +1701,8 @@ function wireTools() {
       if (e.key === "+" || e.key === "=") { e.preventDefault(); click("zoomIn"); return; }
       if (e.key === "-" || e.key === "_") { e.preventDefault(); click("zoomOut"); return; }
       if (e.key === "0") { e.preventDefault(); click("zoomFit"); return; }
+      // J: Join. Refused with the reason as a message - a key press shows no tooltip.
+      if (k === "j" && !e.shiftKey) { e.preventDefault(); toggleJoin(); return; }
     }
 
 
@@ -1791,6 +1805,7 @@ async function doDownload(fmt) {
       recordOwnExport(fc);
       toast("Saved " + ext.toUpperCase());
       markExported();
+      noteExport("download");
     } else {
       const stem = buildFilename(ext).slice(0, -(ext.length + 1)); // drop the ".ext" reliably
       for (let i = 0; i < segments.length; i++) {
@@ -1799,6 +1814,7 @@ async function doDownload(fmt) {
       }
       toast(`Saved ${segments.length} ${ext.toUpperCase()} parts`);
       markExported();
+      noteExport("download");
     }
   } catch (e) {
     toast("Download failed: " + (e.message || e));
@@ -1836,6 +1852,7 @@ async function downloadPdf() {
   await saveBlob(blob, buildFilename("pdf"));
   toast(nLinks > 1 ? "Saved PDF: " + nLinks + " URLs are clickable" : linked ? "Saved PDF — URL is clickable" : "Saved PDF");
   markExported();
+  noteExport("download");
 }
 
 async function doCopy() {
@@ -1843,7 +1860,8 @@ async function doCopy() {
     const fc = flatten(segments[0]);
     const blob = await canvasToBlob(fc, "image/png");
     await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
-    if (segments.length === 1) { markExported(); recordCopy(fc); }   // "Copied first section" is not the whole capture
+    if (segments.length === 1) { markExported(); recordCopy(fc); }
+    noteExport("copy");   // "Copied first section" is not the whole capture
     toast(segments.length > 1 ? "Copied first section" : "Copied to clipboard");
   } catch (e) {
     toast(/too large/.test(e.message || "") ? "Image too large to copy" : "Copy failed (browser blocked it)");
@@ -1894,6 +1912,7 @@ function startCrop() {
   exitAnnot();
   cropping = true;
   cropBar.hidden = false;
+  closeJoin(); closeBarMenu(); renderBands();
   cropOverlay.hidden = false;
   cropRect.hidden = true;
   // The overlay uses CSS inset:0, so it always matches the canvas display size at
@@ -1905,6 +1924,7 @@ function endCrop() {
   cropOverlay.hidden = true;
   cropRect.hidden = true;
   dragStart = null;
+  renderBands();
 }
 
 cropOverlayEvents();
@@ -2470,6 +2490,7 @@ function snapDoc(label) {
   const s = snapAnnots(); s.doc = captureDoc(); s.rid = currentRecentId; s.label = label || ""; return s;
 }
 function pushEntry(s) {
+  closeActionToast();
   undoStack.push(s);
   if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
   redoStack = [];
@@ -3074,6 +3095,7 @@ function annotUndo() { return stepHistory(-1); }
 function annotRedo() { return stepHistory(1); }
 function stepHistory(dir) {
   if (docBusy) return docBusy.then(() => stepHistory(dir));   // presses queue in order
+  closeActionToast();
   cancelDrag();
   const from = dir < 0 ? undoStack : redoStack, to = dir < 0 ? redoStack : undoStack;
   if (!from.length) return;
@@ -3098,7 +3120,7 @@ function restoreDoc(e, from, to) {
     maybeAnnot();
     scheduleRecentSave();
     markEdited();
-    syncDocTitle(); rosterChanged(true);
+    syncDocTitle(); rosterChanged(true); renderBands();
   };
   let r;
   try { r = applyDocState(e.doc); } catch (err) { to.pop(); from.push(e); toast("Couldn't undo that step"); return; }
@@ -3406,6 +3428,7 @@ function timeAgo(ts) {
 }
 
 async function openRecent() {
+  closeJoin(); closeBarMenu();
   const d = el("recentDrawer"), list = el("recentList");
   let items = [];
   if (recentEnabled) { try { items = await recentList(); } catch (_) {} }
@@ -3707,7 +3730,7 @@ async function uploadToDrive() {
 
     const vis = shareAnyone ? (sharedPublic ? "public link" : "private — sharing failed") : "private";
     lastDriveLink = link;
-    sentToDrive = true; rosterChanged(true);
+    sentToDrive = true; rosterChanged(true); noteExport("drive");
     // Reveal the "Copy link" button so the link can be re-copied at any time — even if
     // the auto-copy below fails (tab not focused) or the clipboard later gets overwritten
     // by a Ctrl+C / Copy (which puts the image on the clipboard, replacing this link).
@@ -3923,6 +3946,7 @@ function showError(message, title) {
   errorWrap.hidden = false;
   errorMsg.textContent = message || "Something went wrong.";
   rosterChanged(true);
+  closeJoin(); renderBands();
 }
 
 let toastTimer = null;
@@ -3986,7 +4010,7 @@ let hereTimer = null;
 const handoffPngCache = new WeakMap();   // page canvas -> its PNG Blob (a canvas's pixels never change in place)
 let thumbCache = null;           // { key, url }
 const rosterListeners = new Set();   // UI hooks (badge, suggestion bar, source band)
-let rosterStarted = false;
+let rosterStarted = false, rosterStartedAt = 0;
 
 function rosterNewId() {
   try { return crypto.randomUUID(); } catch (_) { return Date.now().toString(36) + Math.random().toString(36).slice(2, 10); }
@@ -4043,7 +4067,7 @@ function myCard(withThumb) {
     h: segments.reduce((a, s) => a + s.canvas.height, 0), dpr, segs: segments.length,
     pw: doc ? fullWpx : (baseSeg0 ? baseSeg0.width : 0), ph: doc ? fullHpx : (baseSeg0 ? baseSeg0.height : 0),
     restored: restoredRecentId != null, sentToDrive, unsaved: hasUnsavedMarks(),
-    incognito: !!(meta && meta.incognito), pages: pages.map((p) => p.k)
+    incognito: !!(meta && meta.incognito), pages: pages.map((p) => p.k), recentId: currentRecentId
   };
   if (withThumb && st === "ready") c.thumb = rosterThumb();
   return c;
@@ -4060,7 +4084,7 @@ function rosterEmit(what) { for (const fn of rosterListeners) { try { fn(what); 
 // unguarded one crashed the whole editor in the test harness.
 function rosterInit() {
   if (rosterStarted || typeof BroadcastChannel !== "function") return;
-  rosterStarted = true;
+  rosterStarted = true; rosterStartedAt = Date.now();
   try { rosterBc = new BroadcastChannel(ROSTER_NAME); } catch (_) { rosterBc = null; return; }
   if (typeof rosterBc.unref === "function") rosterBc.unref();   // Node (the test harness) only: never keeps the process alive
   rosterBc.onmessage = (e) => { try { onRosterMsg(e.data); } catch (_) {} };
@@ -4312,27 +4336,26 @@ function partFromPage(pg, peer) {
     stampTime: pg.stampTime ? new Date(pg.stampTime) : null, barOn: !!pg.barOn, barBaked: !!pg.barBaked,
     wasCropped: !!pg.wasCropped, capKey: pg.capKey || null, srcEditorId: peer ? peer.editorId : null };
 }
-// Join another open editor's page(s) into this capture. One retry when the source is merely slow
-// to answer (all editors share one thread); an asleep tab is reported so the UI can offer Wake.
-async function joinFromPeer(peer, opts) {
+// Another open editor's page(s). One retry when the source is merely slow to answer (all editors
+// share one thread); an asleep tab is reported so the UI can offer Wake, and a tab found closed is
+// forgotten. Returns { pages } or { error: { reason (for the tester), code, cancelled } }.
+async function fetchPeerPages(peer, opts) {
   opts = opts || {};
-  const why = joinBlockedReason();
-  if (why) return { ok: false, reason: why };
-  if (!!peer.incognito !== !!(meta && meta.incognito)) return { ok: false, reason: "An incognito capture can only be joined with another incognito capture." };
-  let pages;
-  try {
-    pages = opts.wake ? await wakeAndRequest(peer) : await requestPages(peer, { onAck: opts.onAck });
-  } catch (e) {
-    let reason = e && e.reason;
-    if (reason === "noanswer" && !opts.wake) {
-      try { pages = await requestPages(peer, { ackMs: 5000, onAck: opts.onAck }); reason = null; } catch (e2) { reason = e2 && e2.reason; }
-    }
-    if (reason === "closed") { dropPeer(peer.editorId); mirrorRemove(peer.editorId); }
-    if (reason) return { ok: false, reason: giveMessage(reason, peer), code: reason, cancelled: reason === "cancelled" };
+  let pages = null, reason = null;
+  const plain = async (ackMs) => { try { pages = await requestPages(peer, { ackMs, onAck: opts.onAck }); reason = null; } catch (e) { reason = e && e.reason; } };
+  if (opts.wake) {
+    try { pages = await wakeAndRequest(peer); } catch (e) { reason = e && e.reason; }
+    if (reason === "noanswer") await plain();                  // it woke up by itself meanwhile
+  } else {
+    await plain();
+    if (reason === "noanswer") await plain(5000);
   }
-  const incoming = pages.map((pg) => ({ part: partFromPage(pg, peer), marks: pg.annots || [], orderTime: pg.stampTime }));
-  return joinPages(incoming, { via: "tab" });
+  if (reason === "closed") { dropPeer(peer.editorId); mirrorRemove(peer.editorId); }
+  if (reason) return { error: { reason: giveMessage(reason, peer), code: reason, cancelled: reason === "cancelled" } };
+  return { pages };
 }
+// Join another open editor's page(s) into this capture (joinSources: the Join UI section).
+function joinFromPeer(peer, opts) { return joinSources([{ card: peer }], opts); }
 
 /* ---- who to offer (pure) ---- */
 function joinCandidates(list, me, now, dismissed) {
@@ -4393,6 +4416,671 @@ function syncDocTitle() {
 function noteRestored(rec, opts) {
   if (!(opts && opts.reload)) restoredRecentId = rec.id;
   editRev++; pixRev++;
+  joinUIRestored();
   syncDocTitle();
   rosterChanged(true);
+}
+
+/* ------------------------- Join UI ------------------------- */
+// What the tester sees of Join: the Join button + badge, ONE band under the toolbar (crop >
+// "joined into" note > arrange bar > suggestion - never two at once), the Join drawer, the
+// action message with its Undo, and the per-page URL-bar menu.
+// Page titles and URLs come from arbitrary web pages, so every node that shows one is built
+// with textContent - never innerHTML: this page has chrome.* access.
+const ACTION_TOAST_MS = 8000;
+const JOIN_WINDOW_MIN = JOIN_WINDOW_MS / 60000;   // options.html says "the last 20 minutes"
+let suggestSt = { mode: "none", hiddenFor: null, shown: [] };
+let suggestCards = [];
+const joinUI = { slim: false, fetching: null, fetchingKeys: null, sourceHidden: null, asleep: new Set(), live: "" };
+let areaKey = "";
+let drawerRenderSeq = 0;
+
+// A small element builder: strings become text, never markup.
+function h(tag, props, ...kids) {
+  const e = document.createElement(tag);
+  const direct = { class: "className", text: "textContent", title: "title", disabled: "disabled", hidden: "hidden",
+    type: "type", checked: "checked", tabIndex: "tabIndex", src: "src", alt: "alt", htmlFor: "htmlFor", id: "id" };
+  if (props) for (const k of Object.keys(props)) {
+    const v = props[k];
+    if (v == null || v === false) continue;
+    if (k.startsWith("on") && typeof v === "function") e.addEventListener(k.slice(2), v);
+    else if (k === "dataset") Object.assign(e.dataset, v);
+    else if (direct[k]) e[direct[k]] = v;
+    else e.setAttribute(k, String(v));
+  }
+  for (const c of kids.flat()) {
+    if (c == null || c === false) continue;
+    if (typeof c === "string") {
+      const t = typeof document.createTextNode === "function" ? document.createTextNode(c) : Object.assign(document.createElement("span"), { textContent: c });
+      e.appendChild(t);
+    } else e.appendChild(c);
+  }
+  return e;
+}
+function setKids(parent, nodes) {
+  if (typeof parent.replaceChildren === "function") parent.replaceChildren(...nodes);
+  else { parent.textContent = ""; for (const n of nodes) parent.appendChild(n); }
+}
+const svgNS = "http://www.w3.org/2000/svg";
+function icon(d) {
+  if (typeof document.createElementNS !== "function") return null;
+  const s = document.createElementNS(svgNS, "svg"); s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("aria-hidden", "true");
+  for (const part of [].concat(d)) { const p = document.createElementNS(svgNS, "path"); p.setAttribute("d", part); s.appendChild(p); }
+  return s;
+}
+const SWAP_ICON = ["M4 8h14l-3-3", "M20 16H6l3 3"];
+function fmtClock(ts) {
+  try { return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }); } catch (_) { return ""; }
+}
+function areaHint() { return "Capture area" + (areaKey ? " (" + areaKey + ")" : ""); }
+const CIRCLED = "①②③④⑤⑥⑦⑧⑨";
+function pageNo(i) { return CIRCLED[i] || String(i + 1); }
+function cardName(c) { return (c.pages && c.pages.length > 1 ? c.title : (c.ownTitle || c.title)) || "Untitled capture"; }
+
+/* ---- view models (pure enough to test without a DOM) ---- */
+function joinBtnState() {
+  const pages = doc ? doc.parts.length : 1;
+  if (segments.length !== 1) return { disabled: true, on: false, title: "This capture is too long to join (saved in " + segments.length + " parts). Capture just the part you need with " + areaHint() + ", then join it." };
+  if (cropping) return { disabled: true, on: false, title: "Finish or cancel the crop first" };
+  if (joinUI.fetching) return { disabled: true, on: false, title: "Getting " + joinUI.fetching + "…" };
+  if (pages > 1) return { disabled: false, on: true, title: pages + " pages joined: add another or change the arrangement (J)" };
+  const ready = joinablePeers().filter((c) => c.state === "ready");
+  if (ready.length === 1) return { disabled: false, on: false, title: "Join with " + cardName(ready[0]) + ", or add another picture (J)" };
+  return { disabled: false, on: false, title: "Join another capture into this image (J)" };
+}
+function bandToShow() {
+  if (stage.hidden || tools.hidden) return null;
+  if (cropping) return "crop";
+  const src = sourceBandHost();
+  if (src && src.editorId !== joinUI.sourceHidden) return "source";
+  if (doc && doc.parts.length > 1) return joinUI.slim ? "arrangeSlim" : "arrange";
+  const live = suggestSt.mode === "full" || suggestSt.mode === "compact";
+  if (live && defaultSettings.joinSuggest !== false && suggestSt.shown.length) return suggestSt.mode === "compact" ? "suggestCompact" : "suggest";
+  return null;
+}
+function statusPartsFor() {
+  if (!doc) return null;
+  return doc.parts.length + " pages · " + (doc.dir === "col" ? "one under the other" : "side by side") +
+    (docLayout && docLayout.rects.some((r) => r.cut) ? " · cut to fit" : "");
+}
+// Params in URL a that are missing or different in URL b ("trackingNo=212502,212795").
+function queryDiff(a, b) {
+  let A, B;
+  try { A = new URL(a); B = new URL(b); } catch (_) { return ""; }
+  const q = (u) => new URLSearchParams(u.search || (String(u.hash || "").split("?")[1] || ""));
+  const qa = q(A), qb = q(B), out = [];
+  qa.forEach((v, k) => { if (qb.get(k) !== v) out.push(k + "=" + v); });
+  const s = out.join("&");
+  return s.length > 60 ? s.slice(0, 59) + "…" : s;
+}
+// "Other tab · a different page · captured 11:04:50, last edited 2 min ago · 3 marks"
+function describePartner(c) {
+  const me = myCard(false);
+  const bits = [{ t: "Other tab" }];
+  if (c.pageKey && c.pageKey === me.pageKey) {
+    bits.push({ t: "same page, " + ((c.stampTime || 0) <= (me.stampTime || 0) ? "earlier" : "later") });
+    const qd = queryDiff(c.url, me.url);
+    if (qd) bits.push({ t: "different filters (", mark: qd, after: ")" });
+  } else bits.push({ t: "a different page" });
+  if (c.stampTime) {
+    let t = "captured " + fmtClock(c.stampTime);
+    if ((c.lastActive || 0) - c.stampTime > 60000) t += ", last edited " + timeAgo(c.lastActive);
+    bits.push({ t });
+  }
+  bits.push({ t: c.marks ? c.marks + " mark" + (c.marks > 1 ? "s" : "") : "no marks" });
+  if (c.pages && c.pages.length > 1) bits.push({ t: c.pages.length + " pages" });
+  return { name: cardName(c), bits };
+}
+function bitNodes(bits) {
+  const out = [];
+  bits.forEach((b, i) => {
+    if (i) out.push(" · ");
+    out.push(b.t);
+    if (b.mark) out.push(h("mark", { text: b.mark }), b.after || "");
+  });
+  return out;
+}
+function stepCounts() {
+  if (!doc || !docLayout) return [];
+  const counts = doc.parts.map(() => 0);
+  for (const a of annotations) if (a.type === "step") counts[pageIndexAt({ x: a.x1, y: a.y1 }, docLayout.rects)]++;
+  return counts;
+}
+// D2: only worth saying when a later page's steps now continue an earlier page's numbering.
+function stepNote(counts) {
+  const first = counts.findIndex((n) => n > 0);
+  if (first < 0 || !counts.slice(first + 1).some((n) => n > 0)) return null;
+  const total = counts.reduce((a, n) => a + n, 0);
+  return "Steps now run 1–" + total + (counts.length === 2 ? " across both pages" : " across all " + counts.length + " pages");
+}
+function downloadTooltip() {
+  if (!meta) return "Download (Ctrl+S)";
+  const ext = currentFormat === "jpg" ? "jpg" : currentFormat === "pdf" ? "pdf" : "png";
+  if (segments.length > 1 && ext !== "pdf") return "Download (Ctrl+S): saves " + segments.length + " files, -part1." + ext + " to -part" + segments.length + "." + ext;
+  try { return "Download (Ctrl+S): saves as " + buildFilename(ext); } catch (_) { return "Download (Ctrl+S)"; }
+}
+
+/* ---- the band slot ---- */
+function renderBands() {
+  const want = bandToShow();
+  const sb = el("suggestBar"), ab = el("arrangeBar"), so = el("sourceBar");
+  if (sb) sb.hidden = !(want === "suggest" || want === "suggestCompact");
+  if (ab) ab.hidden = !(want === "arrange" || want === "arrangeSlim");
+  if (so) so.hidden = want !== "source";
+  if (want === "suggest" || want === "suggestCompact") renderSuggest(want === "suggestCompact");
+  if (want === "arrange" || want === "arrangeSlim") renderArrange(want === "arrangeSlim");
+  if (want === "source") renderSource();
+  const cn = el("cropJoinNote"); if (cn) cn.hidden = !(cropping && doc);
+  reflectJoinBtn();
+}
+function reflectJoinBtn() {
+  const b = el("join"); if (!b) return;
+  const s = joinBtnState();
+  b.disabled = s.disabled;
+  b.classList.toggle("on", s.on);
+  b.title = s.title;
+  const d = el("joinDrawer");
+  b.setAttribute("aria-expanded", d && !d.hidden ? "true" : "false");
+  const n = s.on ? 0 : joinablePeers().filter((c) => c.state === "ready").length;
+  const badge = el("joinBadge");
+  if (badge) { badge.hidden = n === 0; badge.textContent = n > 99 ? "99+" : String(n); }
+  const sr = el("joinBadgeSr"); if (sr) sr.textContent = n ? n + " capture" + (n > 1 ? "s" : "") + " ready to join" : "";
+}
+
+/* ---- the suggestion bar ---- */
+async function maybeSuggestJoin() {
+  if (!shouldSuggest(defaultSettings)) return;
+  const wait = Math.max(0, rosterStartedAt + ROLLCALL_MS - Date.now());   // the roll-call's answers
+  if (wait) await new Promise((r) => setTimeout(r, wait));
+  if (!shouldSuggest(defaultSettings)) return;
+  const dismissed = await loadDismissed();
+  let streak = 0;
+  try { streak = ((await chrome.storage.local.get("joinDismissStreak")) || {}).joinDismissStreak || 0; } catch (_) {}
+  if (!shouldSuggest(defaultSettings) || suggestSt.mode !== "none") return;
+  const pick = joinCandidates([...peers.values()], myCard(false), Date.now(), dismissed);
+  suggestCards = pick.cards;
+  suggestSt = suggestNext(suggestSt, { type: "show", cards: pick.cards, streak });
+  for (const c of pick.cards.slice(0, 2)) requestThumb(c);
+  renderBands();
+}
+function suggestEvent(type, extra) { suggestSt = suggestNext(suggestSt, Object.assign({ type }, extra || {})); renderBands(); }
+// Download / Copy / PDF shrink the suggestion (the tester may still join); Drive files it away.
+function noteExport(kind) { suggestEvent(kind === "drive" ? "drive" : "export"); }
+function joinButtonFor(label, cards, primary) {
+  const busy = joinUI.fetching;
+  const mine = busy && joinUI.fetchingKeys && cards.some((c) => joinUI.fetchingKeys.includes(c.capKey));
+  if (mine) return h("button", { class: "tbtn" + (primary ? " primary" : ""), type: "button", "aria-disabled": "true" }, h("span", { class: "spin" }), "Getting " + busy + "…");
+  return h("button", { class: "tbtn" + (primary ? " primary" : ""), type: "button", disabled: !!busy, onclick: () => joinCards(cards) }, label);
+}
+function renderSuggest(compact) {
+  const bar = el("suggestBar"); if (!bar) return;
+  bar.classList.toggle("compact", !!compact);
+  bar.setAttribute("aria-busy", joinUI.fetching ? "true" : "false");
+  const cards = suggestSt.shown.map((k) => suggestCards.find((c) => c.capKey === k)).filter(Boolean);
+  if (!cards.length) { setKids(bar, []); return; }
+  const busy = !!joinUI.fetching;
+  const x = (label, keys) => h("button", { class: "tbtn ghost sg-x", type: "button", title: label, "aria-label": label, disabled: busy, onclick: () => dismissSuggestion(keys) }, "×");
+  const nodes = [];
+  if (cards.length === 1) {
+    const c = cards[0], d = describePartner(c);
+    if (!compact && c.thumb) nodes.push(h("span", { class: "sg-thumb" }, h("img", { src: c.thumb, alt: "" }), h("span", { class: "sg-pop" }, h("img", { src: c.thumb, alt: "" }))));
+    nodes.push(h("span", { class: "sg-txt" },
+      h("span", { class: "sg-l1" }, compact ? "Also join with " : "Join with ", h("b", { text: d.name }), "?"),
+      compact ? null : h("span", { class: "sg-l2" }, ...bitNodes(d.bits))));
+    nodes.push(h("span", { class: "spacer" }));
+    nodes.push(joinButtonFor(compact ? "Join" : (joinLayoutPref === "col" ? "Join one under the other" : "Join side by side"), [c], true));
+    nodes.push(x("Don't offer " + d.name + " again", [c.capKey]));
+  } else {
+    nodes.push(h("span", { class: "sg-txt" }, h("span", { class: "sg-l1", text: compact ? "Also join a page you just captured?" : "Join with a page you just captured?" })));
+    for (const c of cards.slice(0, 2)) {
+      const d = describePartner(c);
+      const mine = busy && joinUI.fetchingKeys && joinUI.fetchingKeys.length === 1 && joinUI.fetchingKeys[0] === c.capKey;
+      nodes.push(h("button", { class: "tbtn sg-card", type: "button", disabled: busy && !mine, "aria-disabled": mine ? "true" : null, onclick: mine ? null : () => joinCards([c]) },
+        mine ? h("span", { class: "spin" }) : (c.thumb ? h("img", { src: c.thumb, alt: "" }) : null),
+        h("span", { class: "sg-cardtxt" }, h("b", { text: mine ? "Getting " + d.name + "…" : d.name }), h("span", null, ...bitNodes(d.bits.slice(1))))));
+    }
+    nodes.push(joinButtonFor("Join all " + (cards.length + 1) + " (oldest first)", cards, false));
+    nodes.push(h("button", { class: "tbtn ghost", type: "button", disabled: busy, onclick: () => openJoin(), text: "More…" }));
+    nodes.push(h("span", { class: "spacer" }));
+    nodes.push(x("Don't offer these again", cards.map((c) => c.capKey)));
+  }
+  setKids(bar, nodes);
+}
+async function dismissSuggestion(keys) {
+  suggestSt = keys.length >= suggestSt.shown.length ? suggestNext(suggestSt, { type: "dismiss" }) : suggestNext(suggestSt, { type: "dismissOne", capKey: keys[0] });
+  renderBands();
+  try { const o = {}; for (const k of keys) o[DISMISS_PREFIX + k] = Date.now(); await chrome.storage.session.set(o); } catch (_) {}
+  if (suggestSt.mode !== "closed") return;
+  try {
+    const s = (await chrome.storage.local.get(["joinDismissStreak", "joinDismissHintShown"])) || {};
+    await chrome.storage.local.set({ joinDismissStreak: (s.joinDismissStreak || 0) + 1, joinDismissHintShown: true });
+    if (!s.joinDismissHintShown) toast("You can join any time with the Join button (J)");
+  } catch (_) {}
+}
+// Live roster changes: a partner that closed, went to Drive or joined elsewhere leaves the bar;
+// its marks count and thumbnail stay current; an open drawer follows.
+function onJoinRoster(what) {
+  if (suggestSt.mode === "full" || suggestSt.mode === "compact") {
+    const now = joinCandidates([...peers.values()], myCard(false), Date.now(), new Set()).cards;
+    for (const k of suggestSt.shown.slice()) {
+      const c = now.find((q) => q.capKey === k);
+      if (!c) suggestSt = suggestNext(suggestSt, { type: "partnerGone", capKey: k });
+      else suggestCards = suggestCards.map((q) => (q.capKey === k ? c : q));
+    }
+  }
+  renderBands();
+  const d = el("joinDrawer");
+  if (d && !d.hidden) renderJoinDrawer(false);
+}
+
+/* ---- joining: tabs, Recent rows, several at once ---- */
+// A Recent row as join pages. A joined row gives every page with the marks wholly on it.
+function recentIncoming(rec) {
+  if (rec.kind === "joined" && rec.pages && rec.pages.length > 1) {
+    return rec.pages.map((pg) => {
+      const r = (rec.rects || []).find((q) => q.pid === pg.pid);
+      const mine = r ? (rec.annots || []).filter((a) => { const s = pagesOfMark(a, rec.rects); return s.size === 1 && s.has(pg.pid); }) : [];
+      const local = { pid: pg.pid, x: 0, y: 0, w: pg.w, h: pg.h, scale: 1, bx: 0, by: 0, bw: pg.w, bh: pg.h };
+      return { part: { src: pg.jpeg, w: pg.w, h: pg.h, dpr: pg.dpr || 1, origin: "recent",
+        meta: { title: pg.title || "", url: pg.url || "", env: pg.env || null }, stampTime: pg.stampTs ? new Date(pg.stampTs) : null,
+        barOn: !!pg.barOn, barBaked: !!pg.barBaked, wasCropped: !!pg.wasCropped, capKey: pg.capKey || null },
+        marks: r ? remapAnnots(cloneAnnots(mine), [r], [local]) : [], orderTime: pg.stampTs || rec.ts };
+    });
+  }
+  return [{ part: { src: rec.blob, w: rec.w, h: rec.h, dpr: rec.dpr || 1, origin: "recent",
+    meta: { title: rec.title || "", url: rec.url || "", env: rec.env || null }, stampTime: new Date(rec.ts),
+    barOn: defaultSettings.infoBar !== false && !!rec.url, barBaked: false, capKey: "recent:" + rec.id },
+    marks: cloneAnnots(rec.annots || []), orderTime: rec.ts }];
+}
+// items: [{ card } | { rec }] -> ONE join (one Ctrl+Z), pages in capture order.
+async function joinSources(items, opts) {
+  opts = opts || {};
+  const why = joinBlockedReason();
+  if (why) return { ok: false, reason: why };
+  const incoming = [];
+  for (const it of items) {
+    if (it.rec) { incoming.push(...recentIncoming(it.rec)); continue; }
+    const peer = it.card;
+    if (!!peer.incognito !== !!(meta && meta.incognito)) return { ok: false, reason: "An incognito capture can only be joined with another incognito capture." };
+    const r = await fetchPeerPages(peer, { wake: opts.wake || joinUI.asleep.has(peer.editorId), onAck: opts.onAck });
+    if (r.error) return Object.assign({ ok: false, peer }, r.error);
+    joinUI.asleep.delete(peer.editorId);
+    for (const pg of r.pages) incoming.push({ part: partFromPage(pg, peer), marks: pg.annots || [], orderTime: pg.stampTime });
+  }
+  if (!incoming.length) return { ok: false, reason: "Nothing to join." };
+  return joinPages(incoming, { via: items.some((i) => i.card) ? "tab" : "recent" });
+}
+async function joinCards(cards, recs) {
+  if (joinUI.fetching) return;
+  const why = joinBlockedReason();
+  if (why) { toast(why); return; }
+  const items = (cards || []).map((card) => ({ card })).concat((recs || []).map((rec) => ({ rec })));
+  if (!items.length) return;
+  const names = (cards || []).map(cardName).concat((recs || []).map((r) => r.title || "Recent capture"));
+  joinUI.fetching = names.join(", ");
+  joinUI.fetchingKeys = (cards || []).map((c) => c.capKey);
+  renderBands();
+  let res;
+  try { res = await joinSources(items); } catch (e) { res = { ok: false, reason: (e && e.message) || "Couldn't join" }; }
+  finally { joinUI.fetching = null; joinUI.fetchingKeys = null; }
+  if (res && !res.ok && res.code === "asleep" && res.peer) joinUI.asleep.add(res.peer.editorId);
+  if (res && res.ok) closeJoin();
+  joinResultToast(res, { names });
+  renderBands();
+  const d = el("joinDrawer"); if (d && !d.hidden) renderJoinDrawer(false);
+}
+
+/* ---- the arrange bar ---- */
+function docWithParts(parts, extra) {
+  const lab = relabel(parts);
+  return Object.assign({}, doc, extra || {}, { parts: lab.parts, meta: joinedMeta(lab.title, hostPartOfDoc()) });
+}
+// A layout that does not fit whole gets cut to fit (never above a mark), or is refused.
+function fitted(next) {
+  const env = { hostDpr: next.dpr, markFloor: next.floor || {} };
+  if (layoutParts(Object.assign({}, next, { cuts: null }), env).fits) return Object.assign({}, next, { cuts: null });
+  const cuts = cutToFit(next, env);
+  return cuts ? Object.assign({}, next, { cuts }) : null;
+}
+async function arrangeChange(label, next, said) {
+  const f = next && fitted(next);
+  if (!f) { toast("That arrangement is too big to join. Try the other layout."); return { ok: false }; }
+  const res = await changeDoc(label, f);
+  if (!res.ok) { if (res.reason) toast(res.reason); return res; }
+  joinUI.live = said || "";
+  renderBands();
+  return res;
+}
+function swapPages() {
+  if (!doc || doc.parts.length !== 2) return;
+  const parts = doc.parts.slice().reverse();
+  return arrangeChange("Swap", docWithParts(parts), "Swapped: " + pageLabel(parts[0]) + " is now first");
+}
+function movePage(pid, d) {
+  if (!doc) return;
+  const i = doc.parts.findIndex((p) => p.pid === pid), j = i + d;
+  if (i < 0 || j < 0 || j >= doc.parts.length) return;
+  const parts = doc.parts.slice(); const [p] = parts.splice(i, 1); parts.splice(j, 0, p);
+  return arrangeChange("Move page", docWithParts(parts), pageLabel(p) + " moved " + (d < 0 ? "earlier" : "later"));
+}
+function setLayout(dir) {
+  if (!doc || doc.dir === dir) return;
+  joinLayoutPref = dir;
+  try { const p = chrome.storage.local.set({ joinLayout: dir }); if (p && p.catch) p.catch(() => {}); } catch (_) {}
+  return arrangeChange("Layout", Object.assign({}, doc, { dir }), dir === "col" ? "One under the other" : "Side by side");
+}
+function setMatchHeights(on) { if (doc) return arrangeChange("Match heights", Object.assign({}, doc, { matchHeights: !!on }), on ? "Heights matched" : "Full pages"); }
+function setMatchText(on) { if (doc) return arrangeChange("Same text size", Object.assign({}, doc, { matchText: !!on }), on ? "Same text size" : "Original sizes"); }
+function barPossible(p) { return !p.barBaked && !!(p.meta && p.meta.url); }
+function setPageBar(pid, on) {
+  if (!doc) return;
+  const parts = doc.parts.map((p) => (p.pid === pid && barPossible(p) ? Object.assign({}, p, { barOn: !!on }) : p));
+  return arrangeChange("URL bar", Object.assign({}, doc, { parts }), "URL bar " + (on ? "on" : "off"));
+}
+function setAllBars(on) {
+  if (!doc) return;
+  const parts = doc.parts.map((p) => (barPossible(p) ? Object.assign({}, p, { barOn: !!on }) : p));
+  return arrangeChange("URL bar", Object.assign({}, doc, { parts }), "URL bars " + (on ? "on" : "off"));
+}
+function zoomToPage(pid) {
+  const r = docLayout && docLayout.rects.find((q) => q.pid === pid);
+  if (!r) return;
+  const avail = Math.max(100, (stage.clientWidth || 800) - 38);
+  zoom = Math.min(4, avail / (r.w / dpr));
+  applyZoom();
+  stage.scrollLeft = r.x / dpr * zoom;
+  stage.scrollTop = r.y / dpr * zoom;
+}
+function fitsDir(dir) { return !!(doc && fitted(Object.assign({}, doc, { dir }))); }
+function arrangeNote() {
+  const s = stepNote(stepCounts());
+  if (s) return s;
+  if (doc.parts.some((p) => p.origin === "file" || p.origin === "paste")) return "Order guessed · Swap if wrong";
+  const cut = docLayout && docLayout.rects.find((r) => r.cut);
+  if (cut) { const p = doc.parts[cut.i]; return pageLabel(p) + " cut to fit · none of your marks are cut"; }
+  if (doc.parts.length >= 3 && doc.dir !== "col") return "Three pages in a row look small in previews · One under the other";
+  return null;
+}
+function pageChipEl(p, i, n) {
+  const sub = p.pid === doc.hostPid ? " · this tab" : p.origin === "file" ? " · from a file" : (p.origin === "paste" || p.origin === "paste-copy") ? " · pasted" : p.origin === "recent" ? " · from Recent" : "";
+  const main = h("button", { class: "pc-main", type: "button", title: "Zoom to " + pageLabel(p) + " (0 fits the whole picture again)", onclick: () => zoomToPage(p.pid) },
+    pageNo(i) + " ", h("span", { class: "pc-name", text: pageLabel(p) }), p.stampTime ? " · " + fmtClock(p.stampTime) : "", sub ? h("span", { class: "pc-sub", text: sub }) : null);
+  const kids = [main];
+  if (n >= 3) {
+    kids.push(h("button", { class: "pc-mv", type: "button", title: "Move earlier", "aria-label": "Move " + pageLabel(p) + " earlier", disabled: i === 0, onclick: () => movePage(p.pid, -1) }, "◂"));
+    kids.push(h("button", { class: "pc-mv", type: "button", title: "Move later", "aria-label": "Move " + pageLabel(p) + " later", disabled: i === n - 1, onclick: () => movePage(p.pid, 1) }, "▸"));
+    kids.push(h("button", { class: "pc-x", type: "button", title: "Remove from this image", "aria-label": "Remove " + pageLabel(p) + " from this image", onclick: () => removePages([p.pid]) }, "×"));
+  }
+  return h("span", { class: "pchip" }, ...kids);
+}
+function renderArrange(slim) {
+  const bar = el("arrangeBar"); if (!bar || !doc) return;
+  bar.classList.toggle("slim", !!slim);
+  const n = doc.parts.length, L = docLayout || {};
+  const swap = n === 2 ? h("button", { class: "tbtn", type: "button", title: "Swap the two pages (marks go with their page)", onclick: () => swapPages() }, icon(SWAP_ICON), "Swap") : null;
+  const undo = h("button", { class: "tbtn", type: "button", title: "Take the other page" + (n > 2 ? "s" : "") + " out again; marks on this page stay", onclick: () => undoJoin(), text: "Undo join" });
+  const nodes = [];
+  if (slim) {
+    nodes.push(h("span", { class: "ab-count", text: n + " pages" }), swap, undo,
+      h("button", { class: "linkbtn", type: "button", onclick: () => { joinUI.slim = false; renderBands(); }, text: "Arrange…" }));
+  } else {
+    nodes.push(h("span", { class: "ab-count", text: n + " pages joined" }));
+    nodes.push(h("span", { class: "pchips" }, ...doc.parts.map((p, i) => pageChipEl(p, i, n))));
+    const seg = (label, dir) => {
+      const on = (doc.dir === "col" ? "col" : "row") === dir, fits = on || fitsDir(dir);
+      return h("button", { class: "tbtn cell" + (on ? " on" : ""), type: "button", "aria-pressed": on ? "true" : "false", disabled: !fits,
+        title: fits ? label : "Too big to join " + label.toLowerCase(), onclick: () => setLayout(dir) }, label);
+    };
+    nodes.push(h("span", { class: "seg", role: "group", "aria-label": "Layout" }, seg("Side by side", "row"), seg("One under the other", "col")));
+    if (swap) nodes.push(swap);
+    if (L.matchShown) {
+      nodes.push(h("label", { class: "bcheck", title: "Cut the taller page to the shorter one's height. None of your marks are cut." },
+        h("input", { type: "checkbox", checked: !!L.matchOn, onchange: (e) => setMatchHeights(e.target.checked) }), "Match heights"));
+    }
+    if (new Set(doc.parts.map((p) => p.dpr || 1)).size > 1) {
+      nodes.push(h("label", { class: "bcheck", title: "Pages captured at different zoom levels: scale them so text is the same size" },
+        h("input", { type: "checkbox", checked: !!doc.matchText, onchange: (e) => setMatchText(e.target.checked) }), "Same text size"));
+    }
+    const note = arrangeNote();
+    if (note) nodes.push(h("span", { class: "bandnote", text: note }));
+    nodes.push(h("span", { class: "spacer" }), undo,
+      h("button", { class: "tbtn ghost", type: "button", title: "Make this bar one short line", onclick: () => { joinUI.slim = true; renderBands(); }, text: "Hide" }));
+  }
+  nodes.push(h("span", { class: "sr-only", "aria-live": "polite", text: joinUI.live || "" }));
+  setKids(bar, nodes.filter(Boolean));
+}
+
+/* ---- the "joined into" note in the source tab ---- */
+function renderSource() {
+  const bar = el("sourceBar"), host = sourceBandHost();
+  if (!bar || !host) return;
+  setKids(bar, [
+    h("span", { class: "src-txt" }, "Joined into the ", h("b", { text: host.ownTitle || host.title || "other" }), " tab. Marks you add here won't appear there."),
+    h("span", { class: "spacer" }),
+    h("button", { class: "tbtn", type: "button", text: "Go there", onclick: () => goToTab(host.tabId).catch((e) => {
+      toast(e && e.reason === "discarded" ? "The browser unloaded that tab to free memory." : "That tab is closed.");
+      joinUI.sourceHidden = host.editorId; renderBands();
+    }) }),
+    h("button", { class: "tbtn ghost", type: "button", title: "Hide this note", "aria-label": "Hide this note", text: "×", onclick: () => { joinUI.sourceHidden = host.editorId; renderBands(); } })
+  ]);
+}
+
+/* ---- the action message: a toast with one button (Undo) ---- */
+let actTimer = null, actEnds = 0, actLeft = 0, actFn = null;
+function showActionToast(text, label, fn, ms) {
+  const t = el("actionToast"); if (!t) { toast(text); return; }
+  const tx = el("actionToastText"), b = el("actionToastBtn");
+  if (tx) tx.textContent = text;
+  if (b) { b.textContent = label; b.hidden = !fn; }
+  actFn = fn || null;
+  const sm = el("stMsg"); if (sm) sm.textContent = text;
+  t.hidden = false;
+  requestAnimationFrame(() => t.classList.add("show"));
+  actLeft = ms || ACTION_TOAST_MS;
+  actResume();
+}
+function actPause() { if (!actTimer) return; clearTimeout(actTimer); actTimer = null; actLeft = Math.max(0, actEnds - Date.now()); }
+function actResume() { const t = el("actionToast"); if (!t || t.hidden || actTimer) return; actEnds = Date.now() + actLeft; actTimer = setTimeout(closeActionToast, actLeft); }
+function closeActionToast() {
+  if (actTimer) { clearTimeout(actTimer); actTimer = null; }
+  actFn = null;
+  const t = el("actionToast"); if (!t || t.hidden) return;
+  t.classList.remove("show");
+  setTimeout(() => { if (!t.classList.contains("show")) t.hidden = true; }, 250);
+}
+// What a join from any source says when it is done: one message with an Undo, or the reason.
+function joinResultToast(res, info) {
+  info = info || {};
+  if (!res || !res.ok) { if (res && res.reason && !res.cancelled) toast(res.reason); return; }
+  suggestEvent("join");
+  try { const p = chrome.storage.local.set({ joinDismissStreak: 0 }); if (p && p.catch) p.catch(() => {}); } catch (_) {}
+  const n = doc ? doc.parts.length : 1;
+  const skipped = (info.skipped || []).length;
+  const text = (info.via === "paste" ? "Pasted picture joined" : "Joined " + n + " pages") +
+    (skipped ? " · " + skipped + " file" + (skipped > 1 ? "s" : "") + " skipped: " + info.skipped[0] : "");
+  const entry = lastJoinEntry;
+  showActionToast(text, "Undo join", () => { if (undoStack[undoStack.length - 1] === entry) annotUndo(); else undoJoin(); });
+}
+
+/* ---- the Join drawer ---- */
+function placePopover(d) {
+  d.style.setProperty("--dx", "0px");
+  const r = d.getBoundingClientRect();
+  const vw = (document.documentElement && document.documentElement.clientWidth) || window.innerWidth || 0;
+  let dx = 0;
+  if (r.left < 8) dx = 8 - r.left; else if (vw && r.right > vw - 8) dx = vw - 8 - r.right;
+  d.style.setProperty("--dx", Math.round(dx) + "px");
+}
+function toggleJoin() { const d = el("joinDrawer"); if (!d) return; if (d.hidden) openJoin(); else closeJoin(); }
+async function openJoin() {
+  const why = tools.hidden ? "Wait for the capture to finish, then join." : joinBlockedReason();
+  if (why) { toast(why); return; }
+  const d = el("joinDrawer"); if (!d) return;
+  closeRecent(); closeBarMenu();
+  const fm = el("formatMenu"); if (fm) fm.hidden = true;
+  d.hidden = false;
+  placePopover(d);
+  reflectJoinBtn();
+  await renderJoinDrawer(true);
+  rollCall(250).then(() => { if (!d.hidden) renderJoinDrawer(false); });   // who is open right now
+}
+function closeJoin(refocus) {
+  const d = el("joinDrawer"); if (!d || d.hidden) return;
+  d.hidden = true;
+  reflectJoinBtn();
+  if (refocus) { const b = el("join"); if (b && b.focus) b.focus(); }
+}
+function cardStateLine(c) {
+  if (joinUI.asleep.has(c.editorId)) return { text: "Asleep · click to wake it", ok: true };
+  if (c.state === "capturing") return { text: "Still capturing…", ok: false };
+  if (c.state === "parts") return { text: "Too long to join (saved in " + c.segs + " parts): capture just the part you need with " + areaHint(), ok: false };
+  if (c.state !== "ready") return { text: "Not available", ok: false };
+  return null;
+}
+async function renderJoinDrawer(focusFirst) {
+  const d = el("joinDrawer"), list = el("joinList"); if (!d || !list) return;
+  const seq = ++drawerRenderSeq;
+  const cards = joinablePeers();
+  let recs = [];
+  if (recentEnabled) {
+    try { recs = await recentList(); } catch (_) {}
+    const openRows = new Set([...peers.values()].map((c) => c.recentId).filter((x) => x != null));
+    const inHere = new Set(doc ? doc.parts.map((p) => p.capKey).filter(Boolean) : []);
+    recs = recs.filter((r) => r.id !== currentRecentId && !openRows.has(r.id) && !inHere.has("recent:" + r.id));
+  }
+  if (seq !== drawerRenderSeq || d.hidden) return;
+  const had = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.jid : null;
+  const picked = new Set(Array.from(list.querySelectorAll ? list.querySelectorAll("input.jpick:checked") : []).map((i) => i.dataset.jid));
+  const nodes = [];
+  const jd = el("jdJoined");
+  if (jd) {
+    jd.hidden = !doc;
+    if (doc) setKids(jd, [h("span", { text: "This image: " + doc.parts.length + " pages" }), h("span", { class: "spacer" }),
+      h("button", { class: "linkbtn", type: "button", text: "Arrange…", onclick: () => { joinUI.slim = false; closeJoin(); renderBands(); } }),
+      h("button", { class: "linkbtn", type: "button", text: "Undo join", onclick: () => { closeJoin(); undoJoin(); } })]);
+  }
+  const selectable = [];
+  const row = (jid, thumb, title, sub, metaLine, state, onJoin, count) => {
+    const ok = !state || state.ok;
+    const box = ok ? h("input", { type: "checkbox", class: "jpick", title: "Tick to join several at once", "aria-label": "Select " + title, dataset: { jid }, checked: picked.has(jid),
+      onclick: (e) => e.stopPropagation(), onchange: () => reflectJoinSel() }) : null;
+    if (ok) selectable.push(jid);
+    const it = h("div", { class: "recent-item jcard" + (ok ? "" : " off"), tabIndex: 0, dataset: { jid }, "aria-disabled": ok ? null : "true", title: ok ? "Join " + title : state.text,
+      onclick: () => { if (ok) onJoin(); },
+      onkeydown: (e) => { if ((e.key === "Enter" || e.key === " ") && e.target === it) { e.preventDefault(); if (ok) onJoin(); } } },
+      box, thumb ? h("img", { src: thumb, alt: "" }) : h("span", { class: "jthumb-empty" }),
+      h("div", { class: "recent-txt" }, h("b", { text: title }), sub ? h("span", null, ...sub) : null, h("span", { text: state ? state.text : metaLine })),
+      ok ? h("span", { class: "recent-open", text: "Join" }) : null);
+    count.push(it);
+    return it;
+  };
+  const tabRows = [];
+  for (const c of cards) {
+    const dsc = describePartner(c);
+    let path = "";
+    try { path = new URL(c.url).pathname; } catch (_) {}
+    row("tab:" + c.editorId, c.thumb, dsc.name, [path, ...(dsc.bits.length > 2 && dsc.bits[2].mark ? [" · ", h("mark", { text: dsc.bits[2].mark })] : [])],
+      dsc.bits.filter((b) => !b.mark && b.t !== "Other tab").map((b) => b.t).join(" · ") + (c.restored ? " · reopened from Recent" : ""),
+      cardStateLine(c), () => joinCards([c]), tabRows);
+    requestThumb(c);
+  }
+  if (tabRows.length) nodes.push(h("div", { class: "jd-sec", text: "Open captures" }), ...tabRows);
+  const recRows = [];
+  for (const r of recs) {
+    const pages = r.kind === "joined" && r.pages ? r.pages.length : 1;
+    row("rec:" + r.id, r.thumb, r.title || r.url || "(untitled)", null,
+      timeAgo(r.ts) + (pages > 1 ? " · " + pages + " pages" : "") + ((r.annots || []).length ? " · " + r.annots.length + " marks" : "") + " · saved copy, slightly softer",
+      null, () => joinCards([], [r]), recRows);
+  }
+  if (recRows.length) nodes.push(h("div", { class: "jd-sec", text: "Recent (closed tabs)" }), ...recRows);
+  if (!nodes.length) {
+    nodes.push(h("div", { class: "recent-empty" }, "No other capture is open. Capture the next page (it opens in its own tab and appears here). Or add a picture: ",
+      h("b", { text: "Choose image file…" }), " · Ctrl+V to paste · drop a file anywhere. Downloaded it already? It's in your Downloads folder."));
+  }
+  setKids(list, nodes);
+  d._rows = { cards, recs };
+  reflectJoinSel();
+  const cnt = el("joinCount"); if (cnt) cnt.textContent = cards.length ? cards.length + " open" : "";
+  // Focus: the one card when there is exactly one to join, otherwise the drawer (no guessing).
+  const all = Array.from(list.children).filter((n) => n.dataset && n.dataset.jid);
+  const again = had && all.find((n) => n.dataset.jid === had);
+  if (again) again.focus();
+  else if (focusFirst) {
+    const oks = all.filter((n) => n.getAttribute ? n.getAttribute("aria-disabled") !== "true" : true);
+    if (selectable.length === 1 && oks[0]) oks[0].focus(); else if (d.focus) d.focus();
+  }
+}
+function selectedSources() {
+  const d = el("joinDrawer"), list = el("joinList");
+  if (!d || !d._rows || !list || !list.querySelectorAll) return { cards: [], recs: [] };
+  const ids = Array.from(list.querySelectorAll("input.jpick:checked")).map((i) => i.dataset.jid);
+  return { cards: d._rows.cards.filter((c) => ids.includes("tab:" + c.editorId)), recs: d._rows.recs.filter((r) => ids.includes("rec:" + r.id)) };
+}
+function reflectJoinSel() {
+  const s = selectedSources(), n = s.cards.length + s.recs.length;
+  const box = el("jdSel"); if (box) box.hidden = n < 2;
+  const b = el("jdJoinSel"); if (b) b.textContent = "Join " + n + " selected (oldest first)";
+}
+
+/* ---- the URL-bar menu of a joined picture ---- */
+function toggleBarMenu() {
+  const m = el("barMenu"); if (!m) return;
+  if (!m.hidden) { closeBarMenu(); return; }
+  if (!doc) return;
+  closeJoin();
+  renderBarMenu();
+  m.hidden = false;
+}
+function closeBarMenu() { const m = el("barMenu"); if (m) m.hidden = true; }
+function renderBarMenu() {
+  const m = el("barMenu"); if (!m || !doc) return;
+  const nodes = [h("div", { class: "dl-menu-head", text: "URL bar on each page" })];
+  for (const p of doc.parts) {
+    const can = barPossible(p);
+    nodes.push(h("label", { class: can ? "bm-row" : "bm-row off" },
+      h("input", { type: "checkbox", checked: can && !!p.barOn, disabled: !can, onchange: (e) => setPageBar(p.pid, e.target.checked).then(renderBarMenu) }),
+      h("span", { class: "bm-name", text: pageLabel(p) }),
+      can ? null : h("span", { class: "dl-note", text: p.barBaked ? "part of the picture" : "no URL for this picture" })));
+  }
+  nodes.push(h("div", { class: "bm-all" },
+    h("button", { class: "linkbtn", type: "button", text: "All on", onclick: () => setAllBars(true).then(renderBarMenu) }),
+    h("button", { class: "linkbtn", type: "button", text: "All off", onclick: () => setAllBars(false).then(renderBarMenu) })));
+  setKids(m, nodes);
+}
+
+// Content replaced by a Recent capture: no suggestion for it, and the "joined into" note re-derives.
+function joinUIRestored() { suggestEvent("restored"); joinUI.sourceHidden = null; joinUI.slim = false; closeJoin(); }
+
+function wireJoinUI() {
+  const b = el("join");
+  if (b) b.addEventListener("click", (e) => { e.stopPropagation(); toggleJoin(); });
+  const sel = el("jdJoinSel"); if (sel) sel.addEventListener("click", () => { const s = selectedSources(); joinCards(s.cards, s.recs); });
+  const f = el("jdFile"); if (f) f.addEventListener("click", () => { closeJoin(); openJoinFilePicker(); });
+  const d = el("joinDrawer");
+  if (d) d.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); closeJoin(true); } });
+  const t = el("actionToast");
+  if (t) {
+    t.addEventListener("pointerenter", actPause); t.addEventListener("pointerleave", actResume);
+    t.addEventListener("focusin", actPause); t.addEventListener("focusout", actResume);
+  }
+  const ab = el("actionToastBtn");
+  if (ab) ab.addEventListener("click", () => { const fn = actFn; closeActionToast(); if (fn) fn(); });
+  const dl = el("download"); if (dl) dl.addEventListener("pointerenter", () => { dl.title = downloadTooltip(); });
+  // Outside press, window blur: close the drawer and the URL-bar menu, like any popover.
+  document.addEventListener("pointerdown", (e) => {
+    const jd = el("joinDrawer"), jb = el("join"), bm = el("barMenu"), ib = el("infobar");
+    if (jd && !jd.hidden && !(jd.contains(e.target) || (jb && jb.contains(e.target)))) closeJoin();
+    if (bm && !bm.hidden && !(bm.contains(e.target) || (ib && ib.contains(e.target)))) closeBarMenu();
+  }, true);
+  window.addEventListener("blur", () => { closeJoin(); closeBarMenu(); });
+  rosterListeners.add(onJoinRoster);
+  try {
+    const p = chrome.storage.local.get("joinLayout");
+    if (p && p.then) p.then((s) => { if (s && (s.joinLayout === "row" || s.joinLayout === "col")) joinLayoutPref = s.joinLayout; }, () => {});
+  } catch (_) {}
+  try {
+    if (chrome.commands && chrome.commands.getAll) {
+      chrome.commands.getAll((cmds) => { const c = (cmds || []).find((x) => x.name === "capture-area"); areaKey = (c && c.shortcut) || ""; });
+    }
+  } catch (_) {}
 }

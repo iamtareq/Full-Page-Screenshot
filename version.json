@@ -1,4 +1,4 @@
 {
-  "version": "1.2.1",
-  "notes": "Fixes: Ctrl+Z, Ctrl+S and tool keys keep working after you touch the Size or Quality slider; the stage scrolls by itself while you draw near its edge; closing a capture with unsaved marks now asks first; Update now lists open captures before it closes them; a dropped file no longer opens in the browser; a reloaded editor tab never shows someone else's capture."
+  "version": "1.3.0",
+  "notes": "Join pages: capture a second page and the editor offers to join it with the one you just captured - side by side, both URL bars in one row, every mark still editable, and the file name keeps both page names. Ctrl+Z or Undo join takes it apart again. The Join button (J) also takes a page from another open capture, a dropped or chosen image file, or Ctrl+V. Also: Crop can be undone, turning the URL bar on or off no longer changes the capture time, editor tabs are named after their page, and a URL bar hidden under Blur or White out is no longer a clickable link in the PDF."
 }

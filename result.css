@@ -643,3 +643,165 @@ body:has(#stage:not([hidden])) .statusbar { display: flex; }
 
 /* A native range has no filled portion; the design's track is ink up to the
    handle. result.js keeps --fill in step with the value. */
+
+/* ============================ Join ============================
+   Token-only, so both themes follow the one prefers-color-scheme block at the
+   top. The canvas pixels Join draws (grey gutter, "continues below" strip) are
+   part of the exported image and deliberately do NOT follow the theme - they
+   live in result.js. The only literal colour here is the #fff matte behind a
+   thumbnail, the same one the Recent drawer uses. */
+
+/* Join button: the badge counts open captures ready to join. Ink, not accent -
+   the accent means "primary action" (18.29:1 light, 14.47:1 dark). */
+.joinwrap { position: relative; display: inline-flex; }
+#join { position: relative; }
+.jbadge {
+  position: absolute; top: -6px; right: -6px; min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: 8px; background: var(--text); color: var(--surface); box-shadow: 0 0 0 2px var(--surface);
+  font: 600 10.5px/16px ui-monospace, "Cascadia Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  text-align: center; pointer-events: none;
+}
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* The drawer is the Recent drawer's twin, anchored to the RIGHT of its button
+   (Join sits in the right-aligned tools); result.js nudges it by --dx so it
+   never leaves the window, and the caret moves back by the same amount. */
+.recent.joindrawer { left: auto; right: 0; width: 400px; translate: var(--dx, 0px) 0; }
+.recent.joindrawer::before { left: auto; right: calc(30px + var(--dx, 0px)); }
+.recent.joindrawer:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.jd-joined { display: flex; align-items: center; gap: 10px; margin: 0 6px 8px; padding: 8px 10px;
+  border-radius: var(--r1); background: var(--accent-wash); font-size: 12.5px; }
+.jd-joined .spacer { flex: 1; }
+.jd-sec { margin: 10px 6px 4px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.jcard .jpick { flex: 0 0 auto; margin: 0; accent-color: var(--accent); }
+.jcard.off { cursor: default; }
+.jcard.off:hover { background: transparent; border-color: transparent; }
+.jcard.off .recent-txt > span:last-child { color: var(--muted); font-style: italic; }
+.jthumb-empty { width: 76px; height: 56px; flex: 0 0 auto; border-radius: var(--r1); border: 1px dashed var(--rule); }
+.jd-sel { display: flex; justify-content: flex-end; margin: 8px 6px 0; }
+.jd-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 10px 6px 2px; padding-top: 10px;
+  border-top: 1px solid var(--rule); font-size: 12px; color: var(--muted); }
+mark { background: color-mix(in srgb, var(--accent) 18%, var(--surface)); color: var(--text); border-radius: 2px; padding: 0 2px; }
+
+/* The band slot under the toolbar. Same geometry as the crop band, but NOT its
+   accent edge: that edge says "you are inside a mode", and none of these is a
+   mode - drawing keeps working with any of them up. */
+.band {
+  display: flex; align-items: center; gap: 10px 12px; flex-wrap: wrap;
+  padding: 7px 14px; min-height: 44px;
+  background: var(--surface); color: var(--text);
+  border-bottom: 1px solid var(--rule);
+  animation: slidedown .16s ease;
+}
+.band.quiet { background: var(--surface-2); }
+.band.compact { min-height: 36px; padding-top: 3px; padding-bottom: 3px; }
+.band .spacer { flex: 1; }
+.band .tbtn { background: var(--surface); border-color: var(--edge); color: var(--text); }
+.band .tbtn:hover { background: var(--surface-2); }
+.band .tbtn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.band .tbtn.primary:hover { background: color-mix(in srgb, var(--accent) 88%, var(--text)); }
+.band .tbtn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+.band .tbtn.ghost:hover { background: color-mix(in srgb, var(--text) 7%, transparent); color: var(--text); }
+.band .tbtn:disabled, .band .tbtn[aria-disabled="true"] { cursor: default; background: var(--surface); border-color: var(--rule); color: var(--muted); }
+.band .tbtn.primary[aria-disabled="true"] { background: color-mix(in srgb, var(--accent) 70%, var(--surface)); border-color: transparent; color: var(--on-accent); }
+.band.quiet .tbtn:not(.ghost) { background: var(--surface); }
+.sg-x { font-size: 18px; line-height: 1; padding: 0 9px; }
+
+/* the suggestion */
+.sg-thumb { position: relative; flex: 0 0 auto; line-height: 0; }
+.sg-thumb > img { width: 64px; height: 40px; object-fit: cover; object-position: top; border: 1px solid var(--rule); border-radius: var(--r1); background: #fff; }
+.sg-pop { display: none; position: absolute; left: 0; top: calc(100% + 6px); z-index: 15; padding: 4px;
+  background: var(--surface); border: 1px solid var(--edge); border-radius: var(--r2); box-shadow: var(--pop); }
+.sg-pop img { width: 220px; height: auto; max-height: 300px; object-fit: cover; object-position: top; background: #fff; }
+.sg-thumb:hover .sg-pop { display: block; }
+.sg-txt { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.sg-l1 { font-size: 13px; }
+.sg-l1 b { font-weight: 600; }
+.sg-l2 { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.band.compact .sg-l2, .band.compact .sg-thumb { display: none; }
+.tbtn.sg-card { height: auto; min-height: 40px; padding: 4px 10px 4px 4px; white-space: normal; text-align: left; max-width: 320px; }
+.tbtn.sg-card img { width: 48px; height: 30px; object-fit: cover; object-position: top; border: 1px solid var(--rule); border-radius: 3px; background: #fff; flex: 0 0 auto; }
+.sg-cardtxt { display: flex; flex-direction: column; min-width: 0; }
+.sg-cardtxt b { font-weight: 600; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sg-cardtxt span { font-size: 11.5px; color: var(--muted); }
+.spin { width: 14px; height: 14px; flex: 0 0 auto; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* the arrange bar */
+.ab-count { font-weight: 600; font-size: 13px; white-space: nowrap; }
+.pchips { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.pchip { display: inline-flex; align-items: stretch; height: 28px; border: 1px solid var(--edge); border-radius: var(--r1); overflow: hidden; background: var(--surface); }
+.pchip > button { border: 0; border-left: 1px solid var(--rule); background: transparent; color: var(--text);
+  font: inherit; font-size: 12.5px; padding: 0 8px; cursor: pointer; white-space: nowrap; }
+.pchip > button:first-child { border-left: 0; }
+.pchip > button:hover { background: var(--surface-2); }
+.pchip > button:disabled { color: var(--muted); cursor: default; background: transparent; }
+.pchip > button:focus-visible { outline-offset: -3px; }
+/* inline text, not flex: a flex item trims the spaces around " · " and after the page number */
+.pc-main { display: inline-block; line-height: 26px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+.pc-name { display: inline-block; max-width: 180px; overflow: hidden; text-overflow: ellipsis; vertical-align: top; }
+.pc-sub { color: var(--muted); }
+.pc-x:hover { color: var(--danger); }
+.seg { display: inline-flex; border: 1px solid var(--edge); border-radius: var(--r1); overflow: hidden; }
+.seg .tbtn.cell { height: 30px; border: 0; border-right: 1px solid var(--rule); border-radius: 0; padding: 0 10px; background: transparent; color: var(--muted); }
+.seg .tbtn.cell:last-child { border-right: 0; }
+.seg .tbtn.cell:hover { background: var(--surface-2); color: var(--text); }
+.seg .tbtn.cell.on { background: var(--accent-wash); color: var(--accent); }
+.seg .tbtn.cell:disabled { background: transparent; color: var(--muted); border-color: var(--rule); }
+.seg .tbtn.cell:focus-visible { outline-offset: -3px; }
+.bcheck { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+.bcheck input { margin: 0; accent-color: var(--accent); }
+.linkbtn { border: 0; background: transparent; padding: 2px 4px; color: var(--accent); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; border-radius: var(--r1); }
+.linkbtn:hover { text-decoration: underline; }
+.bandnote { font-size: 12.5px; color: var(--muted); }
+.band.slim { min-height: 36px; padding-top: 3px; padding-bottom: 3px; }
+.src-txt b { font-weight: 600; }
+
+/* "2 pages" beside the title, while the picture is joined */
+.pagechip { padding: 1px 7px; border-radius: var(--r1); background: var(--surface-2); border: 1px solid var(--rule);
+  color: var(--muted); font-size: 11px; font-weight: 600; white-space: nowrap; }
+.brand:has(#pageChip:not([hidden])) .btitle { max-width: 220px; }
+
+/* the drop target: the whole work area, never in the way of the pointer */
+.work { position: relative; }
+.dropzone {
+  position: absolute; inset: 10px 10px 10px 56px; z-index: 18; pointer-events: none;
+  display: flex; align-items: center; justify-content: center;
+  border: 2px dashed var(--accent); border-radius: var(--r2);
+  background: color-mix(in srgb, var(--accent-wash) 60%, transparent);
+}
+.dropzone.blocked { border-color: var(--edge); background: color-mix(in srgb, var(--ground) 70%, transparent); }
+.dropmsg { max-width: 460px; padding: 10px 16px; border-radius: var(--r2); border: 1px solid var(--edge);
+  background: var(--surface); color: var(--text); box-shadow: var(--pop); font-size: 14px; font-weight: 600; text-align: center; }
+
+/* the action message: the toast, plus one button (Undo join) */
+.actoast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(8px); z-index: 101;
+  display: flex; align-items: center; gap: 14px; max-width: 560px;
+  background: var(--text); color: var(--surface);
+  padding: 7px 8px 7px 18px; border-radius: var(--r2); font-size: 13px; font-weight: 500; box-shadow: var(--pop);
+  opacity: 0; transition: opacity .2s ease, transform .2s cubic-bezier(.2,.8,.3,1);
+}
+.actoast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.actoast button {
+  flex: 0 0 auto; height: 28px; padding: 0 12px; border-radius: var(--r1); cursor: pointer;
+  background: transparent; color: var(--surface); font: inherit; font-weight: 600;
+  border: 1px solid color-mix(in srgb, var(--surface) 55%, var(--text));
+}
+.actoast button:hover { background: color-mix(in srgb, var(--surface) 14%, var(--text)); }
+/* the accent ring is weak on the inverted pill */
+.actoast button:focus-visible { outline: 2px solid var(--surface); outline-offset: 2px; }
+body:has(#actionToast.show) .toast { bottom: 72px; }
+
+/* the URL-bar menu of a joined picture (a .dl-menu, anchored to its group) */
+.barmenu { min-width: 280px; }
+.barmenu .bm-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--r1); cursor: pointer; font-size: 13px; }
+.barmenu .bm-row:hover { background: var(--surface-2); }
+.barmenu .bm-row input { margin: 0; accent-color: var(--accent); }
+.barmenu .bm-row.off { color: var(--muted); cursor: default; }
+.barmenu .bm-row.off:hover { background: transparent; }
+.bm-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bm-all { display: flex; gap: 6px; justify-content: flex-end; padding: 6px 6px 2px; border-top: 1px solid var(--rule); margin-top: 4px; }
+
+/* the crop band's note on a joined picture */
+.cropbar .bandnote { flex: 1 1 260px; }

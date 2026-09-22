@@ -11,8 +11,9 @@
          to take this slot: you already know which tab you are in, and the
          size of the capture is the one fact worth reading here. -->
     <div class="brand">
-      <img src="icons/icon48.png" alt="Full Page Capture" />
+      <img src="icons/icon48.png" alt="Full Page Capture" draggable="false" />
       <span class="btitle" id="capTitle"></span>
+      <span class="pagechip" id="pageChip" hidden></span>
       <span id="dims">&mdash;</span>
     </div>
     <!-- The drawer lives WITH its button so the caret points at it and it
@@ -53,12 +54,35 @@
           <span>URL bar</span>
           </button>
         </div>
+        <div class="dl-menu barmenu" id="barMenu" hidden aria-label="URL bar on each page"></div>
       </div>
       <div class="group">
         <button class="tbtn" id="crop" title="Crop a region">
         <svg viewBox="0 0 24 24"><path d="M6 2v16a2 2 0 0 0 2 2h14M2 6h16a2 2 0 0 1 2 2v14"/></svg>
         <span>Crop</span>
         </button>
+        <div class="joinwrap">
+        <button class="tbtn" id="join" title="Join another capture into this image (J)" aria-haspopup="dialog" aria-expanded="false">
+        <svg viewBox="0 0 24 24"><rect x="2.5" y="8" width="8" height="12" rx="1"/><rect x="13.5" y="8" width="8" height="12" rx="1"/><path d="M17.5 1.5v4.5M15.25 3.75h4.5"/></svg>
+        <span>Join</span>
+        <span class="jbadge" id="joinBadge" hidden aria-hidden="true"></span>
+        <span class="sr-only" id="joinBadgeSr"></span>
+        </button>
+        <!-- Join drawer: open captures, Recent, a file. Built by result.js with textContent only. -->
+        <div class="recent joindrawer" id="joinDrawer" hidden tabindex="-1" role="dialog" aria-label="Join another capture">
+          <div class="recent-head">
+            <h4>Join another capture</h4>
+            <span class="recent-count" id="joinCount"></span>
+          </div>
+          <div class="jd-joined" id="jdJoined" hidden></div>
+          <div id="joinList"></div>
+          <div class="jd-sel" id="jdSel" hidden><button class="tbtn primary" type="button" id="jdJoinSel">Join selected (oldest first)</button></div>
+          <div class="jd-foot">
+            <button class="tbtn" type="button" id="jdFile">Choose image file&hellip;</button>
+            <span>or press Ctrl+V to paste &middot; or drop a picture anywhere</span>
+          </div>
+        </div>
+        </div>
       </div>
       <div class="group quality" id="qualityGroup" hidden>
         <label>Quality</label>
@@ -106,10 +130,17 @@
   <!-- Crop action bar -->
   <div class="cropbar" id="cropbar" hidden>
     <span id="cropInfo">Drag on the image to select a region</span>
+    <span class="bandnote" id="cropJoinNote" hidden>Cropping makes the joined pages one flat picture. Ctrl+Z brings the pages back.</span>
     <div class="spacer"></div>
     <button class="tbtn" id="cropApply">Apply crop</button>
     <button class="tbtn ghost" id="cropCancel">Cancel</button>
   </div>
+
+  <!-- Join bands. At most ONE shows (result.js bandToShow): crop > joined-into note > arrange >
+       suggestion. None is a mode, so none carries the crop band's accent edge. -->
+  <div class="band" id="suggestBar" hidden aria-live="polite"></div>
+  <div class="band" id="arrangeBar" hidden></div>
+  <div class="band quiet" id="sourceBar" hidden></div>
 
   <!-- Annotate mode, part 1: the properties of the CURRENT tool, in a 40px
        strip. It costs height, not width - and fitScale() is width-only, so
@@ -169,6 +200,9 @@
         </div>
     </div>
 
+    <!-- Drop a picture to join it. Never takes the pointer. -->
+    <div class="dropzone" id="dropOverlay" hidden aria-hidden="true"><div class="dropmsg" id="dropMsg">Drop to join with this capture</div></div>
+
     <!-- Progress -->
     <div class="progress-wrap" id="progressWrap">
       <div class="progress-card">
@@ -211,6 +245,8 @@
   </div>
 
   <div class="toast" id="toast" hidden></div>
+  <div class="actoast" id="actionToast" hidden role="status"><span id="actionToastText"></span><button type="button" id="actionToastBtn"></button></div>
+  <input type="file" id="joinFile" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/avif" multiple hidden />
 
   <script src="config.js"></script>
   <script src="lib/pdf.js"></script>
