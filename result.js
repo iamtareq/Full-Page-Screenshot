@@ -89,6 +89,7 @@ let activePointerId = null;
 let activeAnnot = null;      // the selected / just-drawn shape (Paint-style live editing)
 let activeTouched = false;   // has the active shape been edited in place yet? (one undo step per edit session)
 let drag = null;             // { a, sx, sy, orig, moved } while moving a shape with the Select tool
+let stepNums = null;         // Map step-annotation -> its number, rebuilt on every render (D2: reading order)
 let edge = null;             // edge auto-scroll state for the gesture in progress (see edgeBegin)
 const ANNOT_COLORS = ["#D0264A", "#C2530A", "#9A6700", "#0F7A42", "#1D5FD6", "#12151A", "#FFFFFF"];
 // QA bug-report stamps — click to drop a labelled pill (kind → label + colour).
@@ -448,24 +449,34 @@ function formatEnv(env) {
   if (env.loadMs && env.loadMs > 0) parts.push("Load " + (env.loadMs / 1000).toFixed(2) + "s");
   return parts.join("   ·   ");
 }
-function hasEnvLine() { return !!(envBar && meta && meta.env && meta.env.ua && meta.env.vw); }
+function pageHasEnv(pg) { const m = pg && pg.meta; return !!(envBar && m && m.env && m.env.ua && m.env.vw); }
+function hasEnvLine() { return pageHasEnv({ meta }); }
+// The page a single capture's bar describes: this editor's own capture.
+function selfPage() { return { meta, stampTime: stampTime || captureTime }; }
 
-function drawInfoBar(ctx, w, barH) {
+// Draws a URL + time bar for page pg, at (ox, oy), at scale d. Returns the URL's link rect in
+// the canvas's device px (for PDF links) or null. A single capture calls it with no page, no
+// offset and its own dpr, so its draw calls are exactly v1.2.0's.
+function drawInfoBar(ctx, w, barH, pg, d, ox, oy) {
+  pg = pg || selfPage(); d = d || dpr; ox = ox || 0; oy = oy || 0;
+  const pm = pg.meta || {};
+  let link = null;
   ctx.save();
+  if (ox || oy) ctx.translate(ox, oy);
   ctx.fillStyle = "#0f172a";
   ctx.fillRect(0, 0, w, barH);
-  const line = Math.max(2, Math.round(2 * dpr));
+  const line = Math.max(2, Math.round(2 * d));
   ctx.fillStyle = "#14b8a6";
   ctx.fillRect(0, barH - line, w, line);
-  const pad = Math.round(16 * dpr);
-  const fs = Math.round(13 * dpr);
+  const pad = Math.round(16 * d);
+  const fs = Math.round(13 * d);
   const rowH = barH - line;
-  const twoLine = hasEnvLine();
+  const twoLine = pageHasEnv(pg);
   const y1 = twoLine ? Math.round(rowH * 0.31) : Math.round(rowH / 2);
   ctx.textBaseline = "middle";
   ctx.font = `600 ${fs}px system-ui, "Segoe UI", Arial, sans-serif`;
 
-  let timeStr = (stampTime || captureTime || new Date()).toLocaleString();
+  let timeStr = (pg.stampTime || new Date()).toLocaleString();
   let timeW = ctx.measureText(timeStr).width;
   let maxUrlW = w - pad * 3 - timeW;
   if (maxUrlW < 40) {           // bar too narrow for both — keep the URL, drop the time
@@ -476,26 +487,26 @@ function drawInfoBar(ctx, w, barH) {
     ctx.fillStyle = "#94a3b8";   // leftover indigo-era blue; now matches the env line
     ctx.fillText(timeStr, w - pad - timeW, y1);
   }
-  const urlText = fitText(ctx, meta.url || "", maxUrlW);
+  const urlText = fitText(ctx, pm.url || "", maxUrlW);
   if (urlText) {
     ctx.fillStyle = "#e5e7eb";
     ctx.fillText(urlText, pad, y1);
     // Remember where the URL sits so PDF export can lay a clickable link over it.
-    infoBarLink = { x: pad, y: 0, w: ctx.measureText(urlText).width, h: barH, uri: meta.url || "" };
-  } else {
-    infoBarLink = null;
+    link = { x: ox + pad, y: oy, w: ctx.measureText(urlText).width, h: barH, uri: pm.url || "" };
   }
 
   // Line 2: environment metadata (Browser · OS · Viewport · DPR)
   if (twoLine) {
-    ctx.font = `500 ${Math.round(11.5 * dpr)}px system-ui, "Segoe UI", Arial, sans-serif`;
+    ctx.font = `500 ${Math.round(11.5 * d)}px system-ui, "Segoe UI", Arial, sans-serif`;
     ctx.fillStyle = "#9aa7bd";
-    ctx.fillText(fitText(ctx, formatEnv(meta.env), w - pad * 2), pad, Math.round(rowH * 0.72));
+    ctx.fillText(fitText(ctx, formatEnv(pm.env), w - pad * 2), pad, Math.round(rowH * 0.72));
   }
   ctx.restore();
+  return link;
 }
 
-function infoBarHeight() { return Math.max(28, Math.round((hasEnvLine() ? 52 : 34) * dpr)); }
+function barHeightFor(twoLine, d) { return Math.max(28, Math.round((twoLine ? 52 : 34) * d)); }
+function infoBarHeight() { return barHeightFor(hasEnvLine(), dpr); }
 
 function withInfoBar(base) {
   const barH = infoBarHeight();
@@ -503,16 +514,19 @@ function withInfoBar(base) {
   out.width = base.width;
   out.height = base.height + barH;
   const ctx = out.getContext("2d");
-  drawInfoBar(ctx, out.width, barH);
+  infoBarLink = drawInfoBar(ctx, out.width, barH);
   ctx.drawImage(base, 0, barH);
   return out;
 }
 
 // Swap segments[0] between the pristine capture and the bar-stamped version.
 function applyInfoBar() {
-  if (!baseSeg0 || !segments[0]) return;
+  if (doc || !baseSeg0 || !segments[0]) return;   // a joined image draws one bar per page (composeCanvas)
   if (!infoBar) infoBarLink = null; // withInfoBar (which sets it) won't run when off
-  const target = infoBar ? withInfoBar(baseSeg0) : baseSeg0;
+  swapSeg0(infoBar ? withInfoBar(baseSeg0) : baseSeg0);
+}
+// Put a new canvas in segments[0]'s place, keeping it UNDER the annotation layer.
+function swapSeg0(target) {
   const seg = segments[0];
   if (seg.canvas === target) return;
   const before = segments[1] ? segments[1].canvas : (annotCanvas || cropOverlay);
@@ -551,7 +565,7 @@ function shiftAnnotations(dy) {
 }
 
 function toggleInfoBar() {
-  if (stampLocked || segments.length !== 1 || docBusy) return;
+  if (doc || stampLocked || segments.length !== 1 || docBusy) return;   // joined: the per-page bar menu handles it
   const barH = infoBarHeight();
   const turningOn = !infoBar;
   infoBar = !infoBar;
@@ -567,6 +581,503 @@ function toggleInfoBar() {
   reflectInfoBarBtn();
   updateDims();
   applyZoom();
+}
+
+/* ------------------------- Joined document (Join Pages) ------------------------- */
+// A single capture never touches any of this: doc stays null and every existing path
+// (applyInfoBar, toggleInfoBar, saveRecent, the PDF link) behaves exactly as in v1.2.0.
+// A joined image is doc = { dpr, dir, matchHeights, matchText, cuts, parts: [part, ...] }:
+//   parts are in DISPLAY order (Swap = reverse the array) and are IMMUTABLE - a change makes a
+//   new part object with the same pid - so history entries can share them by reference.
+//   part = { pid, src (HTMLCanvasElement for this tab's own page | Blob PNG), w, h (page px,
+//            no live bar), dpr, meta: {title, url, env}, stampTime, barOn, barBaked,
+//            label?, legacy? (host only: the single-capture globals, for collapse) }
+// segments[0].canvas is the COMPOSITE (bars + pages + grey + continues strips, no marks), so
+// flatten / Download / Copy / Print / Drive work unchanged.
+let doc = null;          // null = single capture
+let docLayout = null;    // the layoutParts() result in force - rects for blur clip, step order, remap
+let docLinks = [];       // [{x,y,w,h,uri}] composite device px, one per live URL bar (PDF links)
+let composing = false;   // true while applyDoc awaits decodes: edits and other doc ops wait
+
+const JOIN_GUTTER_CSS = 16;        // grey seam between pages (x host DPR)
+const JOIN_STRIP_CSS = 28;         // "▼ <page> continues below (cut to fit)"
+const JOIN_CLEAR_CSS = 48;         // a cut never lands closer than this under a mark
+const JOIN_MIN_KEEP_CSS = 200;     // never cut a page to less than this (tiny partner guard)
+const JOIN_MAX_PX = 32000000;      // memory budget for the joined canvas
+const JOIN_MATCH_RATIO = 1.5;      // D1: Match heights defaults ON above this
+const JOIN_FILL = "#E2E6EA";
+const JOIN_STRIP_BG = "#475569", JOIN_STRIP_FG = "#F1F5F9";
+
+function isJoined() { return !!doc && doc.parts.length > 1; }
+
+// This tab's own capture as a page. Pixels are baseSeg0 (the pristine capture; after a crop it
+// IS the cropped picture, bar included, hence barBaked).
+// The pid is hostPid, the same identity history entries use for this page, so marks follow
+// it between the single capture and any joined layout.
+function hostPart() {
+  if (doc || segments.length !== 1 || !baseSeg0 || !captureSettled || aborted) return null;
+  return {
+    pid: hostPid, origin: "host", src: baseSeg0, w: baseSeg0.width, h: baseSeg0.height, dpr,
+    meta: { title: meta && meta.title, url: meta && meta.url, env: meta && meta.env },
+    stampTime: stampTime || captureTime, barOn: !stampLocked && infoBar, barBaked: stampLocked, wasCropped,
+    legacy: { meta, infoBar, stampLocked, wasCropped, captureTime, stampTime, truncated, sectionCount }
+  };
+}
+
+// The single capture's page rect, in the same shape as layoutParts() rects (for remap).
+function singleRect() {
+  const c = segments[0] && segments[0].canvas;
+  const barH = (infoBar && !stampLocked && !doc) ? infoBarHeight() : 0;
+  const w = c ? c.width : 0, h = c ? c.height - barH : 0;
+  return { pid: hostPid, i: 0, x: 0, y: 0, w, h: h + barH, barH, cx: 0, cy: barH, cw: w, ch: h, scale: 1, visibleH: h, stripH: 0, cut: false };
+}
+
+// ---- pure layout: no DOM, no globals except the canvas limits ----
+function layoutParts(d, env) {
+  const hd = env.hostDpr || 1;
+  const parts = d.parts, n = parts.length;
+  const G = n > 1 ? Math.round(JOIN_GUTTER_CSS * hd) : 0;
+  const S = Math.round(JOIN_STRIP_CSS * hd);
+  const live = (p) => p.barOn && !p.barBaked;
+  // ONE bar height for the whole document, at the host's scale, so the bars form one row.
+  const docBarH = barHeightFor(parts.some((p) => live(p) && pageHasEnv(p)), hd);
+  const minDpr = Math.min(...parts.map((p) => p.dpr || 1));
+  const cuts = d.cuts || {}, floor = env.markFloor || {};
+  const cells = parts.map((p, i) => {
+    const scale = d.matchText ? minDpr / (p.dpr || 1) : 1;
+    const barH = live(p) ? docBarH : 0;
+    const cw = Math.round(p.w * scale), fullCh = Math.round(p.h * scale);
+    const f = floor[p.pid];
+    const floorCh = (typeof f === "number" && isFinite(f)) ? Math.ceil(f * scale) + Math.round(JOIN_CLEAR_CSS * hd) : 0;
+    const minKeep = Math.min(fullCh, Math.max(floorCh, Math.round(JOIN_MIN_KEEP_CSS * hd)));
+    const c = { pid: p.pid, i, scale, barH, cw, fullCh, minKeep, natural: barH + fullCh, keepCh: fullCh };
+    const want = cuts[p.pid];
+    if (typeof want === "number" && want < p.h) c.keepCh = Math.max(minKeep, Math.round(want * scale));
+    return c;
+  });
+  const row = d.dir !== "col";
+  const nat = cells.map((c) => c.natural);
+  const ratio = n > 1 ? Math.max(...nat) / Math.max(1, Math.min(...nat)) : 1;
+  const matchShown = row && n > 1 && Math.max(...nat) !== Math.min(...nat);
+  const matchOn = matchShown && (d.matchHeights == null ? ratio > JOIN_MATCH_RATIO : !!d.matchHeights);
+  if (matchOn) {
+    const T = Math.min(...nat);
+    for (const c of cells) if (c.natural > T + S) c.keepCh = Math.min(c.keepCh, Math.max(T - S - c.barH, c.minKeep));
+  }
+  let x = 0, y = 0, W = 0, H = 0;
+  const rects = cells.map((c) => {
+    if (c.keepCh + S >= c.fullCh) c.keepCh = c.fullCh;       // a cut that saves nothing is no cut
+    const cut = c.keepCh < c.fullCh, stripH = cut ? S : 0;
+    const ch = cut ? c.keepCh : c.fullCh, cellH = c.barH + ch + stripH;
+    const r = { pid: c.pid, i: c.i, x, y, w: c.cw, h: cellH, barH: c.barH, cx: x, cy: y + c.barH, cw: c.cw, ch,
+                scale: c.scale, visibleH: cut ? Math.floor(c.keepCh / c.scale) : parts[c.i].h, stripH, cut };
+    if (row) { x += c.cw + G; W = x - G; H = Math.max(H, cellH); } else { y += cellH + G; H = y - G; W = Math.max(W, c.cw); }
+    return r;
+  });
+  let fits = true, reason = null;
+  if (n > 1) {
+    const hCap = Math.min(HARD_SEG_HEIGHT, Math.floor(MAX_AREA / Math.max(1, W)));
+    if (W > MAX_SIDE) { fits = false; reason = row ? "Too wide to put side by side." : "Too wide to join."; }
+    else if (H > hCap) { fits = false; reason = row ? "Too tall to join side by side." : "Too tall to put one under the other."; }
+    else if (W * H > JOIN_MAX_PX) { fits = false; reason = "Too big to join whole (" + Math.round(W * H / 1e6) + " megapixels; the limit is " + JOIN_MAX_PX / 1e6 + ")."; }
+  }
+  return { W, H, gutter: G, stripH: S, docBarH, rects, ratio, matchShown, matchOn, fits, reason };
+}
+
+// Explicit cuts {pid: visibleH} that make the layout fit without cutting above a mark, or null.
+function cutToFit(d, env) {
+  const L0 = layoutParts(Object.assign({}, d, { cuts: {} }), env);
+  if (L0.fits) return {};
+  if (L0.W > MAX_SIDE) return null;
+  const hd = env.hostDpr || 1, S = L0.stripH, G = L0.gutter, row = d.dir !== "col";
+  const cells = L0.rects.map((r) => {
+    const p = d.parts[r.i], f = (env.markFloor || {})[p.pid];
+    const fullCh = Math.round(p.h * r.scale);
+    const floorCh = (typeof f === "number" && isFinite(f)) ? Math.ceil(f * r.scale) + Math.round(JOIN_CLEAR_CSS * hd) : 0;
+    return { pid: p.pid, scale: r.scale, barH: r.barH, fullCh, natural: r.barH + fullCh,
+             minKeep: Math.min(fullCh, Math.max(floorCh, Math.round(JOIN_MIN_KEEP_CSS * hd))) };
+  });
+  const hMax = Math.min(HARD_SEG_HEIGHT, Math.floor(MAX_AREA / L0.W), Math.floor(JOIN_MAX_PX / L0.W));
+  const cellAt = (c, cap) => (c.natural <= cap) ? c.natural : Math.min(c.natural, Math.max(c.barH + c.minKeep + S, cap));
+  const total = (cap) => row ? Math.max(...cells.map((c) => cellAt(c, cap))) : cells.reduce((a, c) => a + cellAt(c, cap), 0) + G * (cells.length - 1);
+  if (total(0) > hMax) return null;
+  let lo = 0, hi = Math.max(...cells.map((c) => c.natural));
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (total(mid) <= hMax) lo = mid; else hi = mid - 1; }
+  const out = {};
+  for (const c of cells) {
+    if (c.natural <= lo) continue;
+    const keepCh = Math.max(c.minKeep, lo - c.barH - S);
+    if (keepCh + S < c.fullCh) out[c.pid] = Math.floor(keepCh / c.scale);
+  }
+  return out;
+}
+
+// Which page a point belongs to: inside a cell wins, otherwise the nearest cell.
+function pageIndexAt(pt, rects) {
+  let best = 0, bestD = Infinity;
+  for (let k = 0; k < rects.length; k++) {
+    const r = rects[k];
+    const dx = Math.max(r.x - pt.x, 0, pt.x - (r.x + r.w)), dy = Math.max(r.y - pt.y, 0, pt.y - (r.y + r.h));
+    const dd = dx * dx + dy * dy;
+    if (dd < bestD) { bestD = dd; best = k; }
+  }
+  return best;
+}
+// Page-local <-> composite, for the annotation slice's remap.
+function toPage(pt, r) { return { u: (pt.x - r.cx) / r.scale, v: (pt.y - r.cy) / r.scale }; }
+function toComposite(u, v, r) { return { x: r.cx + u * r.scale, y: r.cy + v * r.scale }; }
+
+// D2: continuous numbering in reading order - page order first, then drawing order.
+function stepNumbers(list, rects) {
+  const steps = [];
+  list.forEach((a, idx) => { if (a.type === "step") steps.push({ a, idx, pg: rects ? pageIndexAt({ x: a.x1, y: a.y1 }, rects) : 0 }); });
+  steps.sort((u, v) => u.pg - v.pg || u.idx - v.idx);
+  const m = new Map();
+  steps.forEach((s, k) => m.set(s.a, k + 1));
+  return m;
+}
+
+function pageLabel(p) {
+  if (p.label) return p.label;                                  // title slice: the page's own part of the joined title
+  if (p.meta && p.meta.title) return p.meta.title;
+  try { return new URL(p.meta.url).hostname.replace(/^www\./, ""); } catch (_) { return "This page"; }
+}
+function exportHost() {
+  const urls = doc ? doc.parts.map((p) => p.meta && p.meta.url) : [meta && meta.url];
+  const hosts = [];
+  for (const u of urls) {
+    let h = ""; try { h = new URL(u).hostname.replace(/^www\./, ""); } catch (_) {}
+    if (h && !hosts.includes(h)) hosts.push(h);
+  }
+  return hosts.join("+");
+}
+
+function drawContinuesStrip(ctx, r, label, d) {
+  const y = r.cy + r.ch;
+  ctx.save();
+  ctx.fillStyle = JOIN_STRIP_BG;
+  ctx.fillRect(r.x, y, r.cw, r.stripH);
+  const pad = Math.round(16 * d);
+  ctx.font = `600 ${Math.round(12.5 * d)}px system-ui, "Segoe UI", Arial, sans-serif`;
+  ctx.fillStyle = JOIN_STRIP_FG;
+  ctx.textBaseline = "middle";
+  ctx.fillText(fitText(ctx, "▼ " + label + " continues below (cut to fit)", r.cw - pad * 2), r.x + pad, y + Math.round(r.stripH / 2));
+  ctx.restore();
+}
+
+async function decodePart(p) {
+  if (typeof Blob !== "undefined" && p.src instanceof Blob) return { img: await createImageBitmap(p.src), owned: true };
+  return { img: p.src, owned: false };                          // this tab's own canvas: never closed
+}
+
+// Draws the document WITHOUT marks: grey, then per page its bar, its pixels (cut / scaled), its strip.
+async function composeCanvas(d, L) {
+  const out = document.createElement("canvas");
+  out.width = L.W; out.height = L.H;
+  const ctx = out.getContext("2d");
+  if (d.parts.length > 1) { ctx.fillStyle = JOIN_FILL; ctx.fillRect(0, 0, L.W, L.H); }   // 1 page: nothing to fill
+  const links = [];
+  for (const r of L.rects) {
+    const p = d.parts[r.i];
+    if (r.barH) { const lk = drawInfoBar(ctx, r.cw, r.barH, p, d.dpr, r.x, r.y); if (lk && lk.uri) links.push(lk); }
+    const dec = await decodePart(p);
+    try {
+      if (r.cut || r.scale !== 1) {
+        if (r.scale !== 1) ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(dec.img, 0, 0, p.w, r.visibleH, r.cx, r.cy, r.cw, r.ch);
+      } else {
+        ctx.drawImage(dec.img, r.cx, r.cy);
+      }
+    } finally {
+      if (dec.owned && dec.img.close) dec.img.close();
+    }
+    if (r.stripH) drawContinuesStrip(ctx, r, pageLabel(p), d.dpr);
+  }
+  return { canvas: out, links };
+}
+
+// Lays out + composes `next` and makes it the image. Marks are moved by the CALLER's
+// opts.placeMarks(newLayout), which runs synchronously right after the swap and before the
+// first render - so nothing can be drawn against a half-applied layout.
+async function applyDoc(next, opts) {
+  opts = opts || {};
+  const L = layoutParts(next, { hostDpr: next.dpr, markFloor: opts.markFloor || next.floor || {} });
+  if (next.parts.length > 1 && !L.fits) return { ok: false, reason: L.reason, layout: L };
+  composing = true;
+  let composed;
+  try { composed = await composeCanvas(next, L); } finally { composing = false; }
+  const { canvas, links } = composed;
+  canvas._fpcComposite = true;
+  const old = segments[0].canvas;
+  swapSeg0(canvas);
+  // A composite is always re-composable from parts, so free its memory now instead of at GC.
+  // NEVER zero anything else: baseSeg0 / a part's src can be segments[0].canvas (bar off, or cropped).
+  if (old && old._fpcComposite && old !== canvas) { old.width = 0; old.height = 0; }
+  fullWpx = L.W; fullHpx = L.H;
+  doc = next; docLayout = L; docLinks = links;
+  // The joined picture is one image now: its own title (both pages), its own identity. The
+  // host's single-capture state lives on in its part's .legacy, for collapse.
+  baseSeg0 = canvas; meta = next.meta || meta; hostPid = next.hostPid || hostPid;
+  stampLocked = false; wasCropped = false;
+  if (!annotCanvas) setupAnnotationLayer(); else { annotCanvas.width = L.W; annotCanvas.height = L.H; }
+  if (opts.placeMarks) opts.placeMarks(L);
+  renderAnnots();
+  reflectInfoBarBtn();
+  updateDims();
+  zoom = null; applyZoom(); stage.scrollTop = 0; stage.scrollLeft = 0;
+  return { ok: true, layout: L };
+}
+
+async function blobToCanvas(blob) {
+  const bmp = await createImageBitmap(blob);
+  const c = document.createElement("canvas");
+  c.width = bmp.width; c.height = bmp.height;
+  c.getContext("2d").drawImage(bmp, 0, 0);
+  if (bmp.close) bmp.close();
+  return c;
+}
+
+// Back to a plain single capture of page p (Undo join / pages removed down to one). The host
+// page restores its exact v1.2.0 globals; another page becomes a capture of its own.
+async function collapseToSingle(p, opts) {
+  opts = opts || {};
+  const canvas = (typeof Blob !== "undefined" && p.src instanceof Blob) ? await blobToCanvas(p.src) : p.src;
+  const g = p.legacy || { meta: Object.assign({ mode: "visible", dpr: p.dpr }, p.meta), infoBar: p.barOn, stampLocked: p.barBaked,
+                          wasCropped: false, captureTime: null, stampTime: p.stampTime, truncated: false, sectionCount: 0 };
+  const old = segments[0].canvas;
+  doc = null; docLayout = null; docLinks = [];
+  meta = g.meta; dpr = p.dpr || 1; infoBar = g.infoBar; stampLocked = g.stampLocked; wasCropped = g.wasCropped;
+  captureTime = g.captureTime; stampTime = g.stampTime; truncated = g.truncated; sectionCount = g.sectionCount;
+  baseSeg0 = canvas; hostPid = p.pid;
+  if (stampLocked) { infoBarLink = null; swapSeg0(canvas); } else applyInfoBar();
+  if (old && old._fpcComposite && old !== segments[0].canvas) { old.width = 0; old.height = 0; }
+  fullWpx = canvas.width; fullHpx = canvas.height;
+  if (annotCanvas) { annotCanvas.width = segments[0].canvas.width; annotCanvas.height = segments[0].canvas.height; }
+  if (opts.placeMarks) opts.placeMarks(singleRect());
+  renderAnnots();
+  reflectInfoBarBtn();
+  updateDims();
+  zoom = null; applyZoom(); stage.scrollTop = 0; stage.scrollLeft = 0;
+}
+
+/* ------------------------- Join Pages: titles, join, undo join ------------------------- */
+// "UMS DEV - Mentor Dashboard [11 04 22] - Md. Sakil Mahmud" + "UMS DEV - Details Report
+// [11 11 41] - Md. Sakil Mahmud" -> "UMS DEV - Mentor Dashboard [11 04 22] + Details Report
+// [11 11 41] - Md. Sakil Mahmud": the shared start and end once, every page's own name kept
+// (the hand-joined file lost page B's name). Cut only at " - " / " | " / " · " style separators,
+// never inside a word. Each page's own part becomes its label (continues strip, chips).
+const TITLE_SEP = /(\s[-|·–—]\s)/;
+function joinTitles(parts) {
+  const raw = parts.map((p) => String((p.meta && p.meta.title) || "").trim() || pageLabel(p));
+  const split = raw.map((t) => t.split(TITLE_SEP));               // [seg, sep, seg, sep, seg]
+  const segs = split.map((a) => a.filter((_, i) => i % 2 === 0));
+  const n = Math.min(...segs.map((a) => a.length));
+  let pre = 0;
+  while (pre < n - 1 && segs.every((a) => a[pre] === segs[0][pre])) pre++;
+  let suf = 0;
+  while (suf < n - 1 - pre && segs.every((a) => a[a.length - 1 - suf] === segs[0][segs[0].length - 1 - suf])) suf++;
+  const join = (a, from, to) => {                                   // segments [from, to) with their own separators
+    const sp = a;
+    let out = "";
+    for (let i = from * 2; i < to * 2 - 1; i++) out += sp[i];
+    return out;
+  };
+  let labels = split.map((a, k) => join(a, pre, segs[k].length - suf).trim() || pageLabel(parts[k]));
+  // The same name more than once (a retake of one page): every copy gets its capture time,
+  // never "A + A". Numbered only when there is no time to tell them apart.
+  const count = {};
+  labels.forEach((l) => { count[l.toLowerCase()] = (count[l.toLowerCase()] || 0) + 1; });
+  const nth = {};
+  labels = labels.map((l, k) => {
+    const key = l.toLowerCase();
+    if (count[key] < 2) return l;
+    nth[key] = (nth[key] || 0) + 1;
+    const t = parts[k].stampTime ? new Date(parts[k].stampTime) : null;
+    return l + " (" + (t ? t.toLocaleTimeString() : nth[key]) + ")";
+  });
+  const head = pre ? join(split[0], 0, pre) + split[0][pre * 2 - 1] : "";
+  const L = segs[0].length;
+  const tail = suf ? split[0][(L - suf) * 2 - 1] + join(split[0], L - suf, L) : "";
+  return { title: head + labels.join(" + ") + tail, labels };
+}
+function relabel(parts) {
+  const t = joinTitles(parts);
+  return { title: t.title, parts: parts.map((p, i) => (p.label === t.labels[i] ? p : Object.assign({}, p, { label: t.labels[i] }))) };
+}
+function hostPartOfDoc() { return doc ? doc.parts.find((p) => p.pid === doc.hostPid) || doc.parts[0] : hostPart(); }
+function joinedMeta(title, host) {
+  const hm = (host && host.legacy && host.legacy.meta) || (host && host.meta) || meta || {};
+  return { mode: "joined", title, url: hm.url, env: hm.env, dpr };
+}
+function partTime(p) { const t = p && p.stampTime; return t ? +new Date(t) : 0; }
+// Commit a half-typed text or callout label before the picture changes shape.
+function commitOpenInput() {
+  const t = document.activeElement;
+  if (t && t.classList && t.classList.contains("annot-text-input") && typeof t.blur === "function") t.blur();
+}
+let lastJoinEntry = null;        // the history entry of the most recent join (its message's Undo)
+
+// One document change - Join, Swap, a layout switch, Match heights, a page's URL bar, Undo join,
+// Remove page: one Ctrl+Z, marks moved to where their pages now sit, the Recent row rewritten
+// whole on the next flush (D3: in place, never a new row).
+//   opts.keepMarks(marks) -> the marks that survive (Undo join drops a removed page's)
+//   opts.incoming [{marks, rect}] -> page-local marks arriving with new pages
+function changeDoc(label, next, opts) {
+  opts = opts || {};
+  if (docBusy) return docBusy.then(() => changeDoc(label, next, opts));
+  if (next.kind === "joined" && next.parts.length > 1) {         // budget first: refused means nothing changed
+    const L = layoutParts(next, { hostDpr: next.dpr, markFloor: next.floor || {} });
+    if (!L.fits) return Promise.resolve({ ok: false, reason: L.reason, layout: L });
+  }
+  if (cropping) endCrop();
+  commitOpenInput(); cancelDrag(); liveAnnot = null; activePointerId = null; clearPendingSel();
+  const oldRects = pageRects();
+  const keep = (opts.keepMarks || ((m) => m))(cloneAnnots(annotations));
+  pushDocHistory(label);
+  const entry = undoStack[undoStack.length - 1];
+  const finish = () => {
+    const now = pageRects();
+    let marks = remapAnnots(keep, oldRects, now);
+    for (const inc of opts.incoming || []) marks = marks.concat(remapAnnots(cloneAnnots(inc.marks || []), [inc.rect], now));
+    annotations = marks;
+    clearActiveAnnot();
+    docDirty = true;
+    renderAnnots(); maybeAnnot(); scheduleRecentSave(); markEdited();
+    return { ok: true, entry };
+  };
+  const fail = (reason) => {
+    if (undoStack[undoStack.length - 1] === entry) undoStack.pop();
+    return { ok: false, reason: reason || "Couldn't put the pages together" };
+  };
+  let r;
+  try { r = applyDocState(next); } catch (e) { return Promise.resolve(fail(e && e.message)); }
+  if (!r || typeof r.then !== "function") return Promise.resolve(finish());
+  docBusy = r.then(finish, (e) => fail(e && e.message)).finally(() => { docBusy = null; });
+  return docBusy;
+}
+
+// Why this capture cannot take another page right now - or null. The Join button, J, Ctrl+V and
+// a dropped file all ask this one question.
+function joinBlockedReason() {
+  if (jobId && !captureSettled) return "Wait for the capture to finish, then join.";
+  if (aborted || !meta || !segments.length) return "Open a capture first, then join another page to it.";
+  if (segments.length !== 1) return "This capture is too long to join (saved in " + segments.length + " parts). Capture just the part you need with Area (Alt+Shift+A), then join it.";
+  if (cropping) return "Finish or cancel the crop first.";
+  if (docBusy) return "Still putting the pages together…";
+  return null;
+}
+
+// Join pages into this capture. incoming: [{ part, marks (page-local), orderTime? }] where part =
+// { src (Blob | canvas), w, h, dpr, meta: {title, url, env}, stampTime, barOn, barBaked,
+//   wasCropped?, origin, capKey?, srcEditorId? }. Pages go in capture-time order, oldest first.
+async function joinPages(incoming, opts) {
+  opts = opts || {};
+  if (docBusy) await docBusy;
+  const why = joinBlockedReason();
+  if (why) return { ok: false, reason: why };
+  const base = doc ? doc.parts.slice() : [hostPart()];
+  if (!base[0]) return { ok: false, reason: "Open a capture first, then join another page to it." };
+  const host = doc ? hostPartOfDoc() : base[0];
+  const seq = Date.now().toString(36);
+  const added = incoming.map((inc, k) => ({
+    part: Object.assign({}, inc.part, { pid: "j" + seq + k, label: undefined }),
+    marks: inc.marks || [], orderTime: inc.orderTime != null ? inc.orderTime : partTime(inc.part)
+  }));
+  // capture-time order, oldest first (left / top); a page with no time goes after this one
+  const hostT = partTime(host) || Date.now();
+  const rank = (p, t) => ({ p, t: t || (hostT + 1) });
+  const ordered = base.map((p) => rank(p, partTime(p))).concat(added.map((a) => rank(a.part, a.orderTime)));
+  ordered.sort((u, v) => u.t - v.t);
+  const lab = relabel(ordered.map((o) => o.p));
+  // 3+ pages joined in ONE action: one under the other when that fits, otherwise side by side.
+  // Adding to a picture that is already joined keeps the layout the tester is looking at.
+  let dir = opts.dir || (doc ? doc.dir : (lab.parts.length > 2 ? "col" : (joinLayoutPref || "row")));
+  const floor = markFloorFor(annotations, pageRects());
+  for (const a of added) Object.assign(floor, markFloorFor(a.marks, [{ pid: a.part.pid, x: 0, y: 0, w: a.part.w, h: a.part.h, scale: 1 }]));
+  const make = (d, cuts) => ({ kind: "joined", dpr, dir: d, matchHeights: doc ? doc.matchHeights : null,
+    matchText: doc ? doc.matchText : false, cuts: cuts || null, floor, parts: lab.parts,
+    hostPid: host.pid, meta: joinedMeta(lab.title, host) });
+  let next = make(dir);
+  let L = layoutParts(next, { hostDpr: dpr, markFloor: floor });
+  if (!L.fits && !opts.dir) {                                       // the other direction may fit
+    const other = make(dir === "row" ? "col" : "row");
+    const L2 = layoutParts(other, { hostDpr: dpr, markFloor: floor });
+    if (L2.fits) { next = other; L = L2; }
+  }
+  if (!L.fits) {                                                    // cut long pages, never above a mark
+    const cuts = cutToFit(next, { hostDpr: dpr, markFloor: floor });
+    if (!cuts) return { ok: false, reason: "These pages are too long to join. Capture just the part you need with Area (Alt+Shift+A), then join." };
+    next = make(next.dir, cuts);
+  }
+  const incomingMarks = added.filter((a) => a.marks.length)
+    .map((a) => ({ marks: a.marks, rect: { pid: a.part.pid, x: 0, y: 0, w: a.part.w, h: a.part.h, scale: 1, bx: 0, by: 0, bw: a.part.w, bh: a.part.h } }));
+  const res = await changeDoc(opts.label || "Join", next, { incoming: incomingMarks });
+  if (res.ok) lastJoinEntry = res.entry;
+  return res;
+}
+let joinLayoutPref = null;       // the last layout chosen, remembered per machine (milestone 4 persists it)
+
+// A single-capture state for one page of a joined picture. The host page gets its exact
+// pre-join state back; a page from elsewhere becomes a capture of its own.
+async function singleStateFromPart(p) {
+  if (p.legacy) {
+    const g = p.legacy;
+    return { kind: "single", base: p.src, infoBar: g.infoBar, stampLocked: g.stampLocked, wasCropped: g.wasCropped,
+             meta: g.meta, dpr: p.dpr || 1, hostPid: p.pid, stampTime: g.stampTime, captureTime: g.captureTime,
+             truncated: g.truncated, sectionCount: g.sectionCount };
+  }
+  const canvas = (typeof Blob !== "undefined" && p.src instanceof Blob) ? await blobToCanvas(p.src) : p.src;
+  return { kind: "single", base: canvas, infoBar: !!p.barOn, stampLocked: !!p.barBaked, wasCropped: !!p.wasCropped,
+           meta: Object.assign({ mode: "visible", dpr: p.dpr || 1 }, p.meta || {}), dpr: p.dpr || 1, hostPid: p.pid,
+           stampTime: p.stampTime || null, captureTime: null, truncated: false, sectionCount: 1 };
+}
+
+// Take pages out of a joined picture - at ANY later time, not only right after the join. Marks on
+// a removed page go with it, and so does an arrow that crosses between a removed and a kept page;
+// the tester is asked first when that would lose anything.
+async function removePages(pids, opts) {
+  opts = opts || {};
+  if (!doc || cropping) return { ok: false };
+  if (docBusy) await docBusy;
+  commitOpenInput();
+  const gone = new Set(pids);
+  const keepParts = doc.parts.filter((p) => !gone.has(p.pid));
+  if (!keepParts.length || keepParts.length === doc.parts.length) return { ok: false };
+  const rects = pageRects();
+  let lost = 0, crossing = 0;
+  const drop = new Set();
+  annotations.forEach((a, i) => {
+    const pg = [...pagesOfMark(a, rects)];
+    const inGone = pg.filter((x) => gone.has(x)).length;
+    if (!inGone) return;
+    if (inGone === pg.length) lost++; else crossing++;
+    drop.add(i);
+  });
+  if ((lost || crossing) && !opts.silent) {
+    const names = doc.parts.filter((p) => gone.has(p.pid)).map(pageLabel).join(" and ");
+    const bits = [];
+    if (lost) bits.push(lost + " mark" + (lost > 1 ? "s" : "") + " on it");
+    if (crossing) bits.push(crossing + " arrow" + (crossing > 1 ? "s" : "") + " crossing both pages");
+    if (!confirm(names + ": remove it from this image? " + bits.join(" and ") + " go too.")) return { ok: false, cancelled: true };
+  }
+  if (gone.has(doc.hostPid)) { flushRecentSave(); currentRecentId = null; }   // the row keeps its last joined state
+  let next;
+  if (keepParts.length === 1) next = await singleStateFromPart(keepParts[0]);
+  else {
+    const lab = relabel(keepParts);
+    const host = keepParts.find((p) => p.pid === doc.hostPid) || keepParts[0];
+    next = Object.assign({}, doc, { parts: lab.parts, cuts: null, hostPid: host.pid, meta: joinedMeta(lab.title, host),
+                                    floor: markFloorFor(annotations.filter((_, i) => !drop.has(i)), rects) });
+  }
+  const oldAnnots = annotations;
+  return changeDoc(opts.label || (keepParts.length === 1 ? "Undo join" : "Remove page"), next, {
+    keepMarks: (m) => m.filter((_, i) => !drop.has(i) && oldAnnots[i] !== undefined)
+  });
+}
+// Back to just this tab's own capture, keeping every mark drawn on it (even after the join).
+function undoJoin() {
+  if (!doc) return Promise.resolve({ ok: false });
+  return removePages(doc.parts.filter((p) => p.pid !== doc.hostPid).map((p) => p.pid));
 }
 
 /* ------------------------- Zoom ------------------------- */
@@ -814,22 +1325,22 @@ function wireTools() {
 }
 
 /* ------------------------- Export helpers ------------------------- */
-function sanitize(name) {
-  return (name || "screenshot").replace(/[\\/:*?"<>|\n\r\t]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80) || "screenshot";
+function sanitize(name, max = 80) {
+  return (name || "screenshot").replace(/[\\/:*?"<>|\n\r\t]+/g, " ").replace(/\s+/g, " ").trim().slice(0, max) || "screenshot";
 }
 function pad(n) { return String(n).padStart(2, "0"); }
 function buildFilename(ext) {
   const d = new Date();
   const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const time = `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-  let host = "";
-  try { host = new URL(meta.url).hostname.replace(/^www\./, ""); } catch (_) {}
+  const host = exportHost();
+  const cap = doc ? 150 : 80;                 // joined names carry every page; single captures unchanged
   const base = (defaultSettings.filenameTemplate || "{title}-{date}")
-    .replace(/{title}/g, sanitize(meta.title))
+    .replace(/{title}/g, sanitize(meta.title, cap))
     .replace(/{date}/g, date)
     .replace(/{time}/g, time)
     .replace(/{host}/g, host || "page");
-  return sanitize(base) + "." + ext;
+  return sanitize(base, cap) + "." + ext;
 }
 
 function canvasToBlob(canvas, type, q) {
@@ -891,12 +1402,15 @@ async function buildPdfImages() {
     const fc = flatten(segments[i]);
     const blob = await canvasToBlob(fc, "image/jpeg", quality);
     const image = { jpeg: new Uint8Array(await blob.arrayBuffer()), width: fc.width, height: fc.height };
-    if (i === 0 && infoBar && infoBarLink && infoBarLink.uri) {
-      const H = fc.height;
-      image.link = {
-        uri: infoBarLink.uri,
-        rect: [infoBarLink.x, H - (infoBarLink.y + infoBarLink.h), infoBarLink.x + infoBarLink.w, H - infoBarLink.y]
-      };
+    const H = fc.height;
+    const toPdf = (l) => ({ uri: l.uri, rect: [l.x, H - (l.y + l.h), l.x + l.w, H - l.y] });
+    const shown = (l) => !annotations.some((a) => (a.type === "blur" || a.type === "whiteout") &&
+      Math.min(a.x1, a.x2) < l.x + l.w && Math.max(a.x1, a.x2) > l.x && Math.min(a.y1, a.y2) < l.y + l.h && Math.max(a.y1, a.y2) > l.y);
+    if (i === 0 && doc) {
+      const ls = docLinks.filter((l) => l && l.uri && shown(l));
+      if (ls.length) image.links = ls.map(toPdf);
+    } else if (i === 0 && infoBar && infoBarLink && infoBarLink.uri && shown(infoBarLink)) {
+      image.link = toPdf(infoBarLink);
     }
     images.push(image);
   }
@@ -905,10 +1419,11 @@ async function buildPdfImages() {
 
 async function downloadPdf() {
   const images = await buildPdfImages();
-  const linked = images.some((im) => im.link);
+  const nLinks = images.reduce((a, im) => a + (im.links ? im.links.length : (im.link ? 1 : 0)), 0);
+  const linked = nLinks === 1;
   const blob = new Blob([FPCPDF.build(images)], { type: "application/pdf" });
   await saveBlob(blob, buildFilename("pdf"));
-  toast(linked ? "Saved PDF — URL is clickable" : "Saved PDF");
+  toast(nLinks > 1 ? "Saved PDF: " + nLinks + " URLs are clickable" : linked ? "Saved PDF — URL is clickable" : "Saved PDF");
   markExported();
 }
 
@@ -1050,6 +1565,7 @@ function applyCrop() {
   pushDocHistory("Crop");
   // Replace the old canvas + annotation layer (annotations are now baked in).
   displayed.remove();
+  if (doc) { doc = null; docLayout = null; docLinks = []; }   // the pages are one picture now (undo slice restores)
   if (annotCanvas) { annotCanvas.remove(); annotCanvas = null; annotCtx = null; }
   // Write the pre-crop markup out against the uncropped image it was actually drawn
   // on, then let go of that Recent row: from here the picture on screen no longer
@@ -1520,14 +2036,23 @@ function cloneAnnots(list) {
   });
 }
 // The page rectangles in canvas px: where each page's CONTENT sits, below its live bar.
+// x/y/w/h/scale = the page CONTENT (below its live bar); bx/by/bw/bh = the whole cell, bar
+// included, which decides the page a point belongs to.
 function pageRects() {
+  if (doc && docLayout) {
+    return docLayout.rects.map((r) => ({ pid: r.pid, x: r.cx, y: r.cy, w: r.cw, h: r.ch, scale: r.scale,
+                                        bx: r.x, by: r.y, bw: r.w, bh: r.h }));
+  }
   const b = baseSeg0 || (segments[0] && segments[0].canvas);
   const y = (b && infoBar && !stampLocked) ? infoBarHeight() : 0;
-  return [{ pid: hostPid, x: 0, y, w: b ? b.width : 0, h: b ? b.height : 0, scale: 1 }];
+  const w = b ? b.width : 0, h = b ? b.height : 0;
+  return [{ pid: hostPid, x: 0, y, w, h, scale: 1, bx: 0, by: 0, bw: w, bh: h + y }];
 }
 function snapAnnots() { const s = cloneAnnots(annotations); s.rects = pageRects(); return s; }
 function captureDoc() {
-  return { kind: "single", base: baseSeg0, infoBar, stampLocked, wasCropped, meta, dpr, hostPid, stampTime };
+  if (doc) return doc;          // immutable: a change always builds a new document object
+  return { kind: "single", base: baseSeg0, infoBar, stampLocked, wasCropped, meta, dpr, hostPid, stampTime,
+           captureTime, truncated, sectionCount };
 }
 function snapDoc(label) {
   const s = snapAnnots(); s.doc = captureDoc(); s.rid = currentRecentId; s.label = label || ""; return s;
@@ -1558,20 +2083,83 @@ function nearestRect(rects, x, y) {
   }
   return best;
 }
+// The page a point belongs to: inside a cell (bar included) wins, otherwise the nearest cell -
+// so a mark on the grey seam goes with the page it is closest to.
+function pageOfPoint(rects, x, y) {
+  let best = null, bd = Infinity;
+  for (const r of rects) {
+    const bx = r.bx != null ? r.bx : r.x, by = r.by != null ? r.by : r.y;
+    const bw = r.bw != null ? r.bw : r.w, bh = r.bh != null ? r.bh : r.h;
+    const dx = Math.max(bx - x, 0, x - (bx + bw)), dy = Math.max(by - y, 0, y - (by + bh));
+    if (dx * dx + dy * dy < bd) { bd = dx * dx + dy * dy; best = r; }
+  }
+  return best;
+}
+function movePoint(x, y, f, t) {
+  const sf = f.scale || 1, st = t.scale || 1;
+  return { x: t.x + (x - f.x) / sf * st, y: t.y + (y - f.y) / sf * st };
+}
+function markCentre(a) {
+  if (a.points && a.points.length) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const q of a.points) { x0 = Math.min(x0, q.x); y0 = Math.min(y0, q.y); x1 = Math.max(x1, q.x); y1 = Math.max(y1, q.y); }
+    return { x: (x0 + x1) / 2, y: (y0 + y1) / 2 };
+  }
+  if (a.x2 != null && a.type !== "callout") return { x: (a.x1 + a.x2) / 2, y: (a.y1 + a.y2) / 2 };
+  return { x: a.x1, y: a.y1 };
+}
+const hasEnds = (a) => (a.type === "arrow" || a.type === "line" || a.type === "callout") && a.x2 != null;
 // Move marks from the page rectangles they were drawn against to where those pages sit now.
-// Single captures only move vertically (the bar toggle); milestone 2 replaces this with the
-// per-end, scaled version that joined pages need, under the same signature.
+// Arrow, line and callout ends go END BY END, so an arrow drawn from page A to page B keeps
+// pointing at the same two things after Swap, a layout change or Undo join. A pen stroke moves
+// with the page under its middle; everything else with the page under its centre. A mark whose
+// page is not in `to` is left alone (callers drop marks of removed pages first).
 function remapAnnots(list, from, to) {
-  if (!from || !to) return list;
+  if (!from || !to || !from.length || !to.length) return list;
+  const target = (r) => r && to.find((q) => q.pid === r.pid);
   for (const a of list) {
-    const cx = (a.x2 != null && a.type !== "callout") ? (a.x1 + a.x2) / 2 : a.x1;
-    const cy = (a.y2 != null && a.type !== "callout") ? (a.y1 + a.y2) / 2 : a.y1;
-    const pf = from.find((r) => cx >= r.x && cx < r.x + r.w && cy >= r.y && cy < r.y + r.h) || nearestRect(from, cx, cy);
-    const pt = pf && to.find((r) => r.pid === pf.pid);
-    if (!pt) continue;
-    if (pt.x !== pf.x || pt.y !== pf.y) shiftAnnotXY(a, pt.x - pf.x, pt.y - pf.y);
+    if (hasEnds(a)) {
+      const f1 = pageOfPoint(from, a.x1, a.y1), t1 = target(f1);
+      const f2 = pageOfPoint(from, a.x2, a.y2), t2 = target(f2);
+      if (t1) { const p = movePoint(a.x1, a.y1, f1, t1); a.x1 = p.x; a.y1 = p.y; }
+      if (t2) { const p = movePoint(a.x2, a.y2, f2, t2); a.x2 = p.x; a.y2 = p.y; }
+      continue;
+    }
+    const c = markCentre(a);
+    const f = pageOfPoint(from, c.x, c.y), t = target(f);
+    if (!t || (t.x === f.x && t.y === f.y && (t.scale || 1) === (f.scale || 1))) continue;
+    const p1 = movePoint(a.x1, a.y1, f, t); a.x1 = p1.x; a.y1 = p1.y;
+    if (a.x2 != null) { const p2 = movePoint(a.x2, a.y2, f, t); a.x2 = p2.x; a.y2 = p2.y; }
+    if (a.points) a.points = a.points.map((q) => movePoint(q.x, q.y, f, t));
   }
   return list;
+}
+// The pages a mark touches (for Undo join / Remove page: which marks go with a page).
+function pagesOfMark(a, rects) {
+  const out = new Set();
+  const add = (r) => { if (r) out.add(r.pid); };
+  if (hasEnds(a)) { add(pageOfPoint(rects, a.x1, a.y1)); add(pageOfPoint(rects, a.x2, a.y2)); }
+  else { const c = markCentre(a); add(pageOfPoint(rects, c.x, c.y)); }
+  return out;
+}
+// {pid: the lowest point any mark reaches on that page, in page-content SOURCE px}. Match heights
+// and Cut to fit never cut above it.
+function markFloorFor(list, rects) {
+  const floor = {};
+  const note = (r, y) => { if (!r) return; const v = (y - r.y) / (r.scale || 1); if (!(floor[r.pid] >= v)) floor[r.pid] = v; };
+  for (const a of list) {
+    const half = (a.width || 0) / 2;
+    if (hasEnds(a)) {
+      note(pageOfPoint(rects, a.x1, a.y1), a.y1 + half);
+      note(pageOfPoint(rects, a.x2, a.y2), a.y2 + half);
+      continue;
+    }
+    const c = markCentre(a);
+    let bottom = c.y;
+    try { const b = annotBBox(a); if (b) bottom = b.y + b.h; } catch (_) {}
+    note(pageOfPoint(rects, c.x, c.y), bottom + half);
+  }
+  return floor;
 }
 
 // ---- Paint-style area selection -------------------------------------------
@@ -1843,6 +2431,7 @@ function startCalloutText(a) {
 function renderAnnots() {
   if (!annotCtx) return;
   annotCtx.clearRect(0, 0, annotCanvas.width, annotCanvas.height);
+  stepNums = stepNumbers(annotations, docLayout && docLayout.rects);
   for (const a of annotations) drawAnnot(a);
   if (liveAnnot && !exportingAnnots) drawAnnot(liveAnnot);   // uncommitted stroke never exports
   // The pending area: a marquee only, no ink.
@@ -1925,13 +2514,12 @@ function drawAnnot(a) {
       // tool: blur leaves a visible "something was hidden here", which is what a
       // bug report should show.
       ctx.fillStyle = "#ffffff";
-      ctx.fillRect(x, y, w, h);
+      forEachPageClip(x, y, w, h, (px, py, pw, ph) => ctx.fillRect(px, py, pw, ph));
       break;
     }
     case "step": {
       // Auto-numbered by position among step badges (so undo/redo renumbers cleanly).
-      const steps = annotations.filter((s) => s.type === "step");
-      const n = steps.indexOf(a) + 1 || steps.length + 1;
+      const n = (stepNums && stepNums.get(a)) || (annotations.filter((s) => s.type === "step").length + 1);
       const r = Math.max(14, (a.width || 6) * 2.4);
       ctx.beginPath();
       ctx.arc(a.x1, a.y1, r, 0, 2 * Math.PI);
@@ -2027,7 +2615,20 @@ function drawPath(ctx, pts) {
   ctx.stroke();
 }
 
+// On a joined image a blur is applied per page, so it never samples the grey seam or the
+// neighbouring page (a redaction must pixelate what it covers, nothing else).
 function drawBlur(ctx, x, y, w, h, strength) {
+  forEachPageClip(x, y, w, h, (px, py, pw, ph) => blurRegion(ctx, px, py, pw, ph, strength));
+}
+function forEachPageClip(x, y, w, h, fn) {
+  if (!docLayout) return fn(x, y, w, h);
+  for (const r of docLayout.rects) {
+    const x0 = Math.max(x, r.x), y0 = Math.max(y, r.y);
+    const x1 = Math.min(x + w, r.x + r.w), y1 = Math.min(y + h, r.y + r.h);
+    if (x1 - x0 > 0 && y1 - y0 > 0) fn(x0, y0, x1 - x0, y1 - y0);
+  }
+}
+function blurRegion(ctx, x, y, w, h, strength) {
   const base = segments[0] && segments[0].canvas;
   if (!base || w < 2 || h < 2) return;
   // Clamp to base bounds. Trim the width/height by however much the origin
@@ -2087,20 +2688,33 @@ function restoreDoc(e, from, to) {
     markEdited();
   };
   let r;
-  try { r = applyDoc(e.doc); } catch (err) { to.pop(); from.push(e); toast("Couldn't undo that step"); return; }
+  try { r = applyDocState(e.doc); } catch (err) { to.pop(); from.push(e); toast("Couldn't undo that step"); return; }
   if (!r || typeof r.then !== "function") { finish(); return; }
   docBusy = r.then(finish, () => { to.pop(); from.push(e); toast("Couldn't undo that step"); })
     .finally(() => { docBusy = null; });
   return docBusy;
 }
-function applyDoc(d) {
-  if (d.kind === "joined") return applyJoinedDoc(d);   // async: composes from the page images
+// Puts back a picture state captured by captureDoc(). A single capture is synchronous; a joined
+// picture composes from its pages (async). NOT the page model's applyDoc(next, opts), which
+// this calls for joined states - two functions of one name silently kept only the later one.
+function applyDocState(d) {
+  if (d.kind === "joined") return applyJoinedDoc(d);
   applySingleDoc(d);
 }
-async function applyJoinedDoc(d) { throw new Error("joined documents arrive in milestone 2"); }
+function applyJoinedDoc(d) {
+  return applyDoc(d, {}).then((res) => {
+    if (!res || !res.ok) throw new Error((res && res.reason) || "Couldn't put the pages together");
+    return res;
+  });
+}
 // Synchronous: every canvas it needs is in hand (the entry pinned the pristine one).
 function applySingleDoc(d) {
+  const oldC = segments[0] && segments[0].canvas;
   for (const seg of segments) seg.canvas.remove();
+  doc = null; docLayout = null; docLinks = [];
+  if ("captureTime" in d) captureTime = d.captureTime;
+  if ("truncated" in d) truncated = d.truncated;
+  if ("sectionCount" in d) sectionCount = d.sectionCount;
   baseSeg0 = d.base; infoBar = d.infoBar; stampLocked = d.stampLocked; wasCropped = d.wasCropped;
   meta = d.meta; dpr = d.dpr; hostPid = d.hostPid;
   if (d.stampTime) stampTime = d.stampTime;
@@ -2110,6 +2724,7 @@ function applySingleDoc(d) {
   canvasHost.insertBefore(shown, cropOverlay);
   segments = [{ canvas: shown, ctx: shown.getContext("2d"), startY: 0, height: shown.height }];
   fullWpx = baseSeg0.width; fullHpx = baseSeg0.height;
+  if (oldC && oldC._fpcComposite && oldC !== shown && oldC !== baseSeg0) { oldC.width = 0; oldC.height = 0; }
   if (annotCanvas || annotating) setupAnnotationLayer();
   el("crop").disabled = false;
   reflectInfoBarBtn(); updateDims(); applyZoom();
@@ -2192,6 +2807,7 @@ async function recentDelete(id) { const db = await dbOpen(); await dbRun(db, "re
 // Annotations are stored WITHOUT the info bar's offset, so a capture saved with the
 // bar on and reopened with it off (or vice versa) still lines up.
 function annotsForSave() {
+  if (doc) return cloneAnnots(annotations);
   const dy = (infoBar && !stampLocked) ? -infoBarHeight() : 0;
   const list = cloneAnnots(annotations);
   if (dy) shiftAnnotList(list, dy);
@@ -2258,8 +2874,59 @@ function flushRecentSave() {
   try { recentUpdateAnnots(id, annotsForSave()).catch(() => {}); } catch (_) {}
 }
 function recentWriteDoc(id) {
+  if (doc) return recentWriteJoined(id);
   const annots = annotsForSave(), pid = hostPid;             // snapshot NOW, write later
-  return recentPatch(id, (rec) => rowAsSingle(rec, pid, annots));   // joined docs: milestone 2
+  return recentPatch(id, (rec) => rowAsSingle(rec, pid, annots));
+}
+function makeThumb(src) {
+  const tw = 220, th = Math.min(400, Math.max(1, Math.round(src.height * tw / src.width)));
+  const tc = document.createElement("canvas"); tc.width = tw; tc.height = th;
+  tc.getContext("2d").drawImage(src, 0, 0, src.width, src.width * th / tw, 0, 0, tw, th);
+  return tc.toDataURL("image/jpeg", 0.7);
+}
+// One JPEG per page image, cached by the image itself: parts are rebuilt on every change (a
+// Swap makes new part objects) but share their src, so pages are encoded once.
+const partJpegCache = new WeakMap();
+const isBlob = (x) => typeof Blob !== "undefined" && x instanceof Blob;
+async function partJpeg(p) {
+  if (!p || !p.src) throw new Error("no page image");
+  if (partJpegCache.has(p.src)) return partJpegCache.get(p.src);
+  let jpeg;
+  if (isBlob(p.src) && /jpe?g/i.test(p.src.type || "")) jpeg = p.src;             // reopened from Recent: already one
+  else jpeg = await canvasToBlob(isBlob(p.src) ? await blobToCanvas(p.src) : p.src, "image/jpeg", 0.85);
+  partJpegCache.set(p.src, jpeg);
+  return jpeg;
+}
+// Snapshot NOW (the picture can change again before the encode finishes), write in the queue.
+// Called only from inside the queue's own link, so it uses rowTx - never recentPatch, which
+// would wait for itself.
+function recentWriteJoined(id) {
+  const d = doc, c = segments[0].canvas;
+  const snap = {
+    now: Date.now(), hostPid: d.hostPid, title: meta && meta.title, w: c.width, h: c.height,
+    thumb: makeThumb(c), annots: annotsForSave(), rects: pageRects(),
+    layout: { dir: d.dir, matchHeights: d.matchHeights, matchText: d.matchText, cuts: d.cuts, floor: d.floor,
+              dpr: d.dpr, order: d.parts.map((p) => p.pid) },
+    pages: d.parts.map((p) => ({ pid: p.pid, title: p.meta && p.meta.title, url: p.meta && p.meta.url,
+      env: p.meta && p.meta.env, dpr: p.dpr, w: p.w, h: p.h, stampTs: p.stampTime ? +new Date(p.stampTime) : null,
+      barOn: !!p.barOn, barBaked: !!p.barBaked, label: p.label, origin: p.origin, wasCropped: !!p.wasCropped }))
+  };
+  const parts = d.parts;
+  return recentQueue(async () => {
+    try {
+      snap.blob = await canvasToBlob(c, "image/jpeg", 0.85);
+      for (const pg of snap.pages) {
+        const p = parts.find((q) => q.pid === pg.pid);
+        // The host's own capture is already the row's JPEG (a crop detaches the row, so an
+        // attached host's pixels are the ones saveRecent encoded): keep it, never re-encode.
+        if (pg.pid === d.hostPid && p && !isBlob(p.src) && !p.barBaked && !p.wasCropped) continue;
+        pg.jpeg = await partJpeg(p);
+      }
+      await rowTx(id, (rec) => rowAsJoined(rec, snap));
+    } catch (_) {
+      if (currentRecentId === id) currentRecentId = null;   // never keep writing marks to a row out of step
+    }
+  });
 }
 
 async function recentPut(rec) {
@@ -2272,7 +2939,7 @@ async function recentPut(rec) {
 function saveRecent() {
   try {
     if (!recentEnabled) return;                                      // nothing is kept unless the user opted in
-    if (!baseSeg0 || segments.length !== 1 || captureTime) return;   // single-image captures only; never re-save a restored one
+    if (doc || !baseSeg0 || segments.length !== 1 || captureTime) return;   // joined rows: Recent slice   // single-image captures only; never re-save a restored one
     if (currentRecentId) return;                // already has (or is getting) a row
     const checkJob = !!jobId && !recentJobChecked;
     recentJobChecked = true;
@@ -2298,6 +2965,12 @@ function saveRecent() {
         // duplicated tab is not a reload: it gets its own row.
         const all = await recentList().catch(() => []);
         const prior = all.find((r) => r.job === jobId);
+        if (prior && !rowHeldElsewhere(prior.id) && prior.kind === "joined") {
+          // A joined picture: reopen it whole. Detach FIRST - attached, restoreRecent's opening
+          // flush would write this fresh, empty mark list over the joined row's marks.
+          if (currentRecentId === id) { currentRecentId = null; setTimeout(() => restoreRecent(prior.id), 0); }
+          return;
+        }
         if (prior && !rowHeldElsewhere(prior.id)) {
           recentAlias.set(id, prior.id);         // writes queued against `id` land on the real row
           if (currentRecentId === id) reattachRecent(prior);
@@ -2344,7 +3017,8 @@ async function openRecent() {
     const t = document.createElement("b"); t.textContent = r.title || r.url || "(untitled)";
     const n = (r.annots || []).length;
     const s = document.createElement("span");
-    s.textContent = timeAgo(r.ts) + "  \u00b7  " + r.w + "\u00d7" + r.h + " px" + (n ? "  \u00b7  " + n + " annotation" + (n > 1 ? "s" : "") : "");
+    const pages = (r.kind === "joined" && r.pages) ? "  \u00b7  " + r.pages.length + " pages" : "";
+    s.textContent = timeAgo(r.ts) + "  \u00b7  " + r.w + "\u00d7" + r.h + " px" + pages + (n ? "  \u00b7  " + n + " annotation" + (n > 1 ? "s" : "") : "");
     tx.appendChild(t); tx.appendChild(s);
     const open = document.createElement("span"); open.className = "recent-open"; open.textContent = "Reopen";
     const del = document.createElement("button"); del.className = "recent-del"; del.title = "Remove from Recent"; del.textContent = "\u00d7";
@@ -2370,8 +3044,9 @@ async function restoreRecent(id) {
   let rec = null;
   try { rec = await recentGet(id); } catch (_) {}
   if (!rec) { toast("That capture is no longer available"); return; }
-  if (annotations.length && !confirm("Replace the current image? Annotations on it will be lost.")) return;
+  if ((annotations.length || doc) && !confirm("Replace the current image? Annotations on it will be lost.")) return;
   flushRecentSave();          // the row being left keeps up to 1.5 s of pending edits
+  if (rec.kind === "joined" && rec.pages && rec.pages.length > 1) return restoreJoinedRecent(rec);
   let bmp;
   try { bmp = await createImageBitmap(rec.blob); } catch (_) { toast("Couldn't load that capture"); return; }
 
@@ -2381,6 +3056,7 @@ async function restoreRecent(id) {
   for (const s of segments) s.canvas.remove();
   if (annotCanvas) { annotCanvas.remove(); annotCanvas = null; annotCtx = null; }
   annotations = []; undoStack = []; redoStack = []; liveAnnot = null; drag = null; clearActiveAnnot(); clearPendingSel();
+  doc = null; docLayout = null; docLinks = [];   // else applyInfoBar() bails and the reopened capture has no bar
 
   const canvas = document.createElement("canvas");
   canvas.width = bmp.width; canvas.height = bmp.height;
@@ -2716,6 +3392,71 @@ function rowHeldElsewhere(id) {
       typeof v.fpcEditorState === "function" && v.fpcEditorState().recentId === id);
   } catch (_) { return false; }
 }
+// A joined Recent row comes back AS a joined picture: live pages, editable marks, Undo join.
+async function restoreJoinedRecent(rec) {
+  const L = rec.layout || {};
+  const order = L.order || rec.pages.map((p) => p.pid);
+  const parts = order.map((pid) => rec.pages.find((p) => p.pid === pid)).filter(Boolean).map((pg) => ({
+    pid: pg.pid, src: pg.jpeg, w: pg.w, h: pg.h, dpr: pg.dpr || 1, origin: pg.origin || "recent",
+    meta: { title: pg.title, url: pg.url, env: pg.env }, stampTime: pg.stampTs ? new Date(pg.stampTs) : null,
+    barOn: !!pg.barOn, barBaked: !!pg.barBaked, label: pg.label, wasCropped: !!pg.wasCropped
+  }));
+  const hd = L.dpr || rec.dpr || 1;
+  const d = { kind: "joined", dpr: hd, dir: L.dir || "row", matchHeights: L.matchHeights == null ? null : L.matchHeights,
+              matchText: !!L.matchText, cuts: L.cuts || null, floor: L.floor || {}, parts, hostPid: rec.hostPid,
+              meta: { mode: "joined", title: rec.title, url: rec.url, env: rec.env, dpr: hd } };
+  // Reset to a blank editor with one placeholder canvas for the composite to replace.
+  if (annotating) exitAnnot();
+  try { endCrop(); } catch (_) {}
+  for (const sg of segments) sg.canvas.remove();
+  if (annotCanvas) { annotCanvas.remove(); annotCanvas = null; annotCtx = null; }
+  annotations = []; undoStack = []; redoStack = []; liveAnnot = null; drag = null; clearActiveAnnot(); clearPendingSel();
+  doc = null; docLayout = null; docLinks = [];
+  const ph = document.createElement("canvas"); ph.width = 1; ph.height = 1;
+  canvasHost.insertBefore(ph, cropOverlay);
+  segments = [{ canvas: ph, ctx: ph.getContext("2d"), startY: 0, height: 1 }];
+  dpr = hd; truncated = false; aborted = false; lastDriveLink = null;
+  { const cl = el("copyLink"); if (cl) { cl.hidden = true; const s2 = cl.querySelector("span"); if (s2) s2.textContent = "Copy link"; } }
+  progressWrap.hidden = true; errorWrap.hidden = true; stage.hidden = false; tools.hidden = false;
+  let res;
+  try { res = await applyDoc(d, {}); } catch (e) { res = { ok: false, reason: e && e.message }; }
+  if (!res || !res.ok) return restoreJoinedFlat(rec);
+  const saved = cloneAnnots(rec.annots || []);
+  annotations = rec.rects ? remapAnnots(saved, rec.rects, pageRects()) : saved;
+  currentRecentId = rec.id; docDirty = false;
+  captureTime = new Date(rec.ts);          // a restored capture: saveRecent and the join offer skip it
+  stampTime = captureTime; lastJoinEntry = null;
+  el("crop").disabled = false;
+  if (!annotCanvas) setupAnnotationLayer();
+  renderAnnots(); setTimeout(maybeAnnot, 0);
+  reflectInfoBarBtn(); updateDims(); applyZoom();
+  closeRecent();
+  bakedMarks = false; exportedClean = true; syncProtection();
+  toast("Reopened: " + (rec.title || "capture") + "  (" + parts.length + " pages)");
+}
+// The pages could not be rebuilt: show the flat copy, marks in place, and DETACH - the joined row
+// must never be overwritten with a flat picture.
+async function restoreJoinedFlat(rec) {
+  let canvas;
+  try { canvas = await blobToCanvas(rec.blob); } catch (_) { toast("Couldn't load that capture"); return; }
+  for (const sg of segments) sg.canvas.remove();
+  doc = null; docLayout = null; docLinks = [];
+  canvasHost.insertBefore(canvas, cropOverlay);
+  segments = [{ canvas, ctx: canvas.getContext("2d"), startY: 0, height: canvas.height }];
+  fullWpx = canvas.width; fullHpx = canvas.height; truncated = false;
+  meta = { mode: "visible", title: rec.title, url: rec.url, dpr: rec.dpr || 1, env: rec.env || undefined };
+  dpr = rec.dpr || 1; captureTime = new Date(rec.ts); stampTime = captureTime;
+  baseSeg0 = canvas; stampLocked = true; infoBarLink = null; wasCropped = false;
+  hostPid = "r" + rec.id + "f"; currentRecentId = null; docDirty = false;
+  annotations = cloneAnnots(rec.annots || []);
+  setupAnnotationLayer(); renderAnnots(); setTimeout(maybeAnnot, 0);
+  el("crop").disabled = false;
+  reflectInfoBarBtn(); updateDims(); applyZoom();
+  closeRecent();
+  bakedMarks = false; exportedClean = true; syncProtection();
+  toast("Reopened as one picture - its pages couldn't be rebuilt");
+}
+
 function reattachRecent(prior) {
   currentRecentId = prior.id;
   const n = (prior.annots || []).length;
