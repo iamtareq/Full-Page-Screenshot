@@ -136,6 +136,11 @@ function runUpdate() {
   const btn = document.getElementById("updBtn");
   const how = document.getElementById("updHow");
   if (!btn) return;
+  if (!updateConfirmed) {
+    const eds = openEditors();
+    if (eds.length) { showUpdateWarning(eds); return; }
+  }
+  updateConfirmed = false;
   btn.disabled = true;
   btn.textContent = "Updating…";
   try {
@@ -166,7 +171,7 @@ function runUpdate() {
           return;
         }
         btn.textContent = "Reloading…";
-        chrome.runtime.reload();   // picks up the just-pulled files
+        settleEditorsThenReload();   // picks up the just-pulled files
       } else {
         btn.disabled = false;
         btn.textContent = "Retry";
@@ -178,6 +183,94 @@ function runUpdate() {
     btn.textContent = "Update now";
     if (how) how.textContent = "Couldn't start the updater.";
   }
+}
+
+/* ---- Open editors: "Update now" must not close them silently -------------------
+ * chrome.runtime.reload() closes every page of this extension - every editor tab and its
+ * marks with it. The popup is an extension page too, so chrome.extension.getViews hands it
+ * each editor's window directly: no "tabs" permission, no roster that can go stale, and a
+ * frozen (sleeping) tab still answers. A discarded tab has no page and is rightly absent. */
+let updateConfirmed = false;
+function openEditors() {
+  let views = [];
+  try { views = chrome.extension.getViews({ type: "tab" }) || []; } catch (_) {}
+  const out = [];
+  for (const v of views) {
+    try {
+      if (!/\/result\.html$/.test(v.location.pathname)) continue;
+      if (typeof v.fpcEditorState !== "function") { out.push({ view: v, title: "", unknown: true }); continue; }
+      const st = v.fpcEditorState();
+      if (st.failed || (!st.hasImage && !st.capturing)) continue;   // error page / empty Recent picker
+      out.push(Object.assign({ view: v }, st));
+    } catch (_) {}
+  }
+  return out;
+}
+function describeEditors(eds) {
+  const name = (e) => e.title || "Untitled capture";
+  const marks = (k) => k + " unsaved mark" + (k === 1 ? "" : "s");
+  const unsaved = eds.filter((e) => e.unsavedMarks);
+  const fresh = eds.filter((e) => !e.unsavedMarks && e.unexported);
+  const busy = eds.filter((e) => e.capturing);
+  let text = eds.length + " open capture" + (eds.length === 1 ? "" : "s") + " will close.";
+  if (unsaved.length === 1) text += " " + name(unsaved[0]) + " has " + marks(unsaved[0].marks) + ".";
+  else if (unsaved.length > 1) text += " " + unsaved.length + " of them have unsaved marks.";
+  else if (fresh.length === 1) text += " " + name(fresh[0]) + " hasn't been downloaded yet.";
+  else if (fresh.length > 1) text += " " + fresh.length + " of them haven't been downloaded yet.";
+  if (busy.length) text += " " + (busy.length === 1 ? "One is" : busy.length + " are") + " still capturing.";
+  if (unsaved.length || fresh.length || busy.length) text += " Download them first, or update anyway.";
+  const rows = eds.map((e) => ({
+    title: name(e), tabId: e.tabId,
+    status: e.unknown ? "open" : e.capturing ? "capturing\u2026" : e.unsavedMarks
+      ? marks(e.marks) + (e.inRecent ? " \u00b7 kept in Recent" : "") : e.unexported ? "not downloaded" : "saved"
+  }));
+  return { text, rows };
+}
+function showUpdateWarning(eds) {
+  const d = describeEditors(eds);
+  const box = document.getElementById("updWarn");
+  document.getElementById("updWarnText").textContent = d.text;
+  const list = document.getElementById("updWarnList");
+  list.textContent = "";
+  for (const r of d.rows) {
+    const li = document.createElement("li");
+    const t = document.createElement("span"); t.className = "uw-title"; t.textContent = r.title;
+    const st = document.createElement("span"); st.className = "uw-status"; st.textContent = r.status;
+    li.appendChild(t); li.appendChild(st);
+    if (r.tabId != null) {
+      const go = document.createElement("button"); go.type = "button"; go.className = "uw-go"; go.textContent = "Show";
+      go.addEventListener("click", () => showEditorTab(r.tabId));
+      li.appendChild(go);
+    }
+    list.appendChild(li);
+  }
+  box.hidden = false;
+  document.getElementById("updAnyway").focus();
+}
+function hideUpdateWarning() { const b = document.getElementById("updWarn"); if (b) b.hidden = true; }
+// tabs.update / windows.update need no permission; Tab.windowId is never scrubbed.
+function showEditorTab(tabId) {
+  try {
+    chrome.tabs.update(tabId, { active: true })
+      .then((t) => t && chrome.windows.update(t.windowId, { focused: true }))
+      .catch(() => {});
+  } catch (_) {}
+}
+// Give each editor a moment to commit a half-typed label and write its marks to Recent.
+function settleEditorsThenReload() {
+  const waits = [];
+  for (const e of openEditors()) {
+    try { if (typeof e.view.fpcBeforeReload === "function") waits.push(e.view.fpcBeforeReload()); } catch (_) {}
+  }
+  let done = false;
+  const go = () => { if (done) return; done = true; chrome.runtime.reload(); };
+  Promise.all(waits).then(go, go);
+  setTimeout(go, 1500);
+}
+{
+  const a = document.getElementById("updAnyway"), c = document.getElementById("updCancel");
+  if (a) a.addEventListener("click", () => { hideUpdateWarning(); updateConfirmed = true; runUpdate(); });
+  if (c) c.addEventListener("click", hideUpdateWarning);
 }
 
 // Show the running version in the footer (handy when checking whether an update applied).

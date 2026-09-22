@@ -50,6 +50,12 @@ let captureSettled = false;
 let recentEnabled = false;   // Settings > "Keep recent captures" - opt-in, off until enabled
 let currentRecentId = null;  // the Recent row this editor writes its annotations back into
 let recentSaveTimer = null;  // true once the job finished (or failed); restoring a Recent capture before that would let late tiles paint over it
+// Work protection - see "Work protection" below.
+let exportedClean = false;   // true right after a Download / Copy / Drive send; any edit clears it
+let bakedMarks = false;      // a Crop flattened marks into the pixels, so annotations[] no longer shows them
+let myTabId = null;          // this editor's own tab id (chrome.tabs.getCurrent - needs no permission)
+let discardGuardOn = null;   // the autoDiscardable state last asked for (null = never asked)
+let recentJobChecked = false; // saveRecent looked for an existing row of this job once
 
 // Annotation state (single-segment images only)
 let annotCanvas = null, annotCtx = null;
@@ -74,6 +80,7 @@ let activePointerId = null;
 let activeAnnot = null;      // the selected / just-drawn shape (Paint-style live editing)
 let activeTouched = false;   // has the active shape been edited in place yet? (one undo step per edit session)
 let drag = null;             // { a, sx, sy, orig, moved } while moving a shape with the Select tool
+let edge = null;             // edge auto-scroll state for the gesture in progress (see edgeBegin)
 const ANNOT_COLORS = ["#D0264A", "#C2530A", "#9A6700", "#0F7A42", "#1D5FD6", "#12151A", "#FFFFFF"];
 // QA bug-report stamps — click to drop a labelled pill (kind → label + colour).
 const STAMPS = {
@@ -103,6 +110,7 @@ async function init() {
   paintQuality();
   reflectFormat();
   wireTools();
+  learnMyTab();
 
   if (!jobId) {
     settleCapture();
@@ -141,7 +149,7 @@ function settleCapture() {
 /* ------------------------- Port handling ------------------------- */
 function onPortMessage(msg) {
   if (!msg || aborted) return;
-  if (msg.type === "error") return showError(msg.error);
+  if (msg.type === "error") return msg.code === "expired" ? onExpired() : showError(msg.error);
   if (msg.type === "meta") return onMeta(msg.meta, msg.count);
   // Tiles decode asynchronously. Serialize them and defer finalize() until they have
   // ALL drawn — otherwise finalize snapshots a half-empty canvas (and the info bar
@@ -211,6 +219,27 @@ async function decodeTile(dataUrl) {
     }
   }
 }
+
+/* ------------------------- Drop guard ------------------------- */
+// Release A (bug 2). Nothing in this editor accepts a drop yet, and a drop the page does not
+// cancel is handed to the browser, which opens the file / link. So every drag is answered here,
+// in the capture phase on window (no element can stop it first), and refused with dropEffect
+// "none". The one exception is text dragged into a text box, which the browser inserts itself.
+function dragHasFiles(dt) {
+  try { return !!dt && Array.prototype.indexOf.call(dt.types || [], "Files") >= 0; } catch (_) { return false; }
+}
+function refuseDrag(e) {
+  if (!dragHasFiles(e.dataTransfer) && isTextEntry(e.target)) return;
+  e.preventDefault();
+  try { if (e.dataTransfer) e.dataTransfer.dropEffect = "none"; } catch (_) {}
+}
+function wireDropGuard() {
+  window.addEventListener("dragstart", (e) => { if (!isTextEntry(e.target)) e.preventDefault(); }, true);
+  window.addEventListener("dragenter", refuseDrag, true);
+  window.addEventListener("dragover", refuseDrag, true);
+  window.addEventListener("drop", refuseDrag, true);
+}
+wireDropGuard();
 
 async function onTile(tile) {
   if (aborted) return;
@@ -307,6 +336,7 @@ function finalize() {
   maybeAnnot();
   settleCapture();
   saveRecent();              // keep the last few captures so a closed tab isn't a lost capture
+  syncProtection();          // an unexported capture must not be discarded
 }
 
 function updateDims() {
@@ -579,6 +609,43 @@ function applyZoom() {
 
   if (cropping && cropOverlay._reset) cropOverlay._reset(); // stale pixel selection after resize
   el("zoomVal").textContent = zoom === null ? "Fit" : Math.round(z * 100) + "%";
+  // A zoom mid-gesture (+/-/0, or Fit following a window resize) changes the scale
+  // under a held pointer; keep the shape's end on the image point now under it.
+  if (edge && edgeLive()) edgeRemap();
+}
+
+/* ------------------------- Keyboard & focus ------------------------- */
+// Real text entry only: where a letter is a letter and Ctrl+Z undoes typing.
+// Sliders, colour pickers, checkboxes and buttons are NOT typing - skipping
+// them too left every shortcut dead once a tester had touched Size or Quality.
+function isTextEntry(t) {
+  if (!t || !t.tagName) return false;
+  if (t.isContentEditable) return true;
+  const tag = String(t.tagName).toUpperCase();
+  if (tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (tag !== "INPUT") return false;
+  // A real <input> with no type attribute reports "text"; mirror that.
+  return /^(text|search|url|tel|email|password|number|date|datetime-local|month|week|time)$/
+    .test(String(t.type || "text").toLowerCase());
+}
+// A press on the image cancels its pointerdown (no text selection, no image
+// drag), and that also cancels Chrome's "a click moves focus" step - so a
+// slider or colour picker touched earlier kept the keyboard. Hand it back.
+// A label being typed is left alone: its own blur is what commits it.
+function releaseControlFocus() {
+  const a = document.activeElement;
+  if (a && a !== document.body && !isTextEntry(a) && typeof a.blur === "function") a.blur();
+}
+// A slider used with the MOUSE gives the keyboard back when released, so the
+// arrow keys scroll again instead of quietly resizing the live shape. Driven
+// from the keyboard (Tab, then arrows) it keeps focus, as it should.
+function handBackAfterPointer(input) {
+  if (!input) return;
+  input.addEventListener("pointerdown", () => {
+    window.addEventListener("pointerup", () => setTimeout(() => {
+      if (document.activeElement === input) input.blur();
+    }, 0), { capture: true, once: true });
+  });
 }
 
 /* ------------------------- Tools wiring ------------------------- */
@@ -597,6 +664,7 @@ function wireTools() {
   window.addEventListener("resize", () => { if (zoom === null && segments.length) applyZoom(); });
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushRecentSave(); });
   window.addEventListener("pagehide", flushRecentSave);
+  window.addEventListener("beforeunload", onBeforeUnload);
   el("download").addEventListener("click", () => doDownload(currentFormat));
   el("formatMenuBtn").addEventListener("click", (e) => {
     e.stopPropagation();
@@ -617,6 +685,7 @@ function wireTools() {
     el("qualityVal").textContent = Math.round(quality * 100) + "%";
     paintQuality();
   });
+  handBackAfterPointer(el("quality"));
 
   el("copy").addEventListener("click", doCopy);
   el("print").addEventListener("click", doPrint);
@@ -649,12 +718,34 @@ function wireTools() {
   wireAnnotation();
 
   window.addEventListener("keydown", (e) => {
-    // Never hijack keys while the user is typing in a field (e.g. the text-label input).
-    const t = e.target;
-    if (t && (/^(input|textarea|select)$/i.test(t.tagName) || t.isContentEditable)) return;
     const ctrl = e.ctrlKey || e.metaKey;
-    const k = e.key.toLowerCase();
+    const k = String(e.key || "").toLowerCase();   // Chrome's autofill fires keydown with no key
+    // Typing in a label: letters, Delete, Ctrl+Z and Ctrl+V all belong to the field.
+    // Save and print still mean save and print - blur first so the label commits
+    // (its blur handler does that) and is in the file, instead of Chrome's own
+    // "Save page as" dialog for the editor page.
+    const t = e.target;
+    if (isTextEntry(t)) {
+      if (ctrl && !e.altKey && (k === "s" || k === "p") && !tools.hidden) {
+        e.preventDefault();
+        if (typeof t.blur === "function") t.blur();
+        if (k === "s") doDownload(currentFormat); else doPrint();
+      }
+      return;
+    }
     if (e.key === "Escape" && el("recentDrawer") && !el("recentDrawer").hidden) { closeRecent(); return; }
+    // Delete in the Recent drawer (a card focused) must not erase the live
+    // shape hidden behind it.
+    if ((e.key === "Delete" || e.key === "Backspace") && t && t.closest && t.closest("#recentDrawer")) return;
+    // No image on screen yet (still stitching, the error card, the Recent-only
+    // page): a key must not save, print or copy the half-drawn canvas behind it.
+    if (tools.hidden) {
+      if (ctrl && (k === "s" || k === "p")) {
+        e.preventDefault();
+        if (!aborted && !captureSettled) toast("Wait for the capture to finish");
+      }
+      return;
+    }
     const click = (id) => { const b = el(id); if (b && !b.disabled) b.click(); };
 
     // ---- Ctrl combos (work whether or not the annotation bar is open) ----
@@ -671,6 +762,7 @@ function wireTools() {
       if (e.key === "-" || e.key === "_") { e.preventDefault(); click("zoomOut"); return; }
       if (e.key === "0") { e.preventDefault(); click("zoomFit"); return; }
     }
+
 
     // ---- annotation-only keys ----
     if (annotating) {
@@ -710,6 +802,7 @@ function wireTools() {
       }
     }
   });
+
 }
 
 /* ------------------------- Export helpers ------------------------- */
@@ -767,6 +860,7 @@ async function doDownload(fmt) {
       const blob = await canvasToBlob(flatten(segments[0]), type, q);
       await saveBlob(blob, buildFilename(ext));
       toast("Saved " + ext.toUpperCase());
+      markExported();
     } else {
       const stem = buildFilename(ext).slice(0, -(ext.length + 1)); // drop the ".ext" reliably
       for (let i = 0; i < segments.length; i++) {
@@ -774,6 +868,7 @@ async function doDownload(fmt) {
         await saveBlob(blob, `${stem}-part${i + 1}.${ext}`);
       }
       toast(`Saved ${segments.length} ${ext.toUpperCase()} parts`);
+      markExported();
     }
   } catch (e) {
     toast("Download failed: " + (e.message || e));
@@ -806,12 +901,14 @@ async function downloadPdf() {
   const blob = new Blob([FPCPDF.build(images)], { type: "application/pdf" });
   await saveBlob(blob, buildFilename("pdf"));
   toast(linked ? "Saved PDF — URL is clickable" : "Saved PDF");
+  markExported();
 }
 
 async function doCopy() {
   try {
     const blob = await canvasToBlob(flatten(segments[0]), "image/png");
     await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    if (segments.length === 1) markExported();   // "Copied first section" is not the whole capture
     toast(segments.length > 1 ? "Copied first section" : "Copied to clipboard");
   } catch (e) {
     toast(/too large/.test(e.message || "") ? "Image too large to copy" : "Copy failed (browser blocked it)");
@@ -888,23 +985,31 @@ function cropOverlayEvents() {
     sel = { x: dragStart.x, y: dragStart.y, w: 0, h: 0 };
     rect.hidden = false;
     updateRect(rect, sel);
+    edgeBegin("crop", e);
     e.preventDefault();
+    releaseControlFocus();
   });
-  window.addEventListener("mousemove", (e) => {
-    if (!cropping || !dragStart) return;
+  // dragStart is in overlay px, so it stays glued to the image while the stage scrolls.
+  const moveTo = (clientX, clientY) => {
     const b = ov.getBoundingClientRect();
-    const cx = Math.max(0, Math.min(e.clientX - b.left, b.width));
-    const cy = Math.max(0, Math.min(e.clientY - b.top, b.height));
+    const cx = Math.max(0, Math.min(clientX - b.left, b.width));
+    const cy = Math.max(0, Math.min(clientY - b.top, b.height));
     sel = { x: Math.min(dragStart.x, cx), y: Math.min(dragStart.y, cy), w: Math.abs(cx - dragStart.x), h: Math.abs(cy - dragStart.y) };
     updateRect(rect, sel);
     const scale = segments[0].canvas.width / segments[0].canvas.getBoundingClientRect().width;
     el("cropInfo").textContent = `${Math.round(sel.w * scale)} × ${Math.round(sel.h * scale)} px`;
+  };
+  window.addEventListener("mousemove", (e) => {
+    if (!cropping || !dragStart) return;
+    if (edge && edge.kind === "crop") edgeTrack(e);
+    moveTo(e.clientX, e.clientY);
   });
-  window.addEventListener("mouseup", () => { dragStart = null; });
+  window.addEventListener("mouseup", () => { dragStart = null; if (edge && edge.kind === "crop") edgeStop(); });
+  ov._moveTo = (x, y) => { if (cropping && dragStart) moveTo(x, y); };
   ov._getSel = () => sel;
   // Called when the canvas is resized (zoom / window resize): a pixel selection made
   // at the old display size is no longer valid, so clear it and ask for a fresh drag.
-  ov._reset = () => { sel = null; dragStart = null; rect.hidden = true; el("cropInfo").textContent = "Drag on the image to select a region"; };
+  ov._reset = () => { sel = null; dragStart = null; if (edge && edge.kind === "crop") edgeStop(); rect.hidden = true; el("cropInfo").textContent = "Drag on the image to select a region"; };
 }
 function updateRect(rect, s) {
   rect.style.left = s.x + "px";
@@ -941,7 +1046,9 @@ function applyCrop() {
   // coordinates (and shifted by a bar that is now baked into the pixels).
   flushRecentSave();
   currentRecentId = null;
+  if (annotations.length) bakedMarks = true;   // the marks now live only in these pixels
   annotations = []; undoStack = []; redoStack = [];
+  markEdited();
   canvasHost.insertBefore(out, cropOverlay);
   segments = [{ canvas: out, ctx, startY: 0, height: sh }];
   fullWpx = sw; fullHpx = sh;
@@ -1030,6 +1137,7 @@ function wireAnnotation() {
   wIn.addEventListener("change", () => {
     try { chrome.storage.local.set({ annotWidth }); } catch (_) {}
   });
+  handBackAfterPointer(wIn);
   (async () => {
     try {
       const s = await chrome.storage.local.get("annotWidth");
@@ -1054,6 +1162,8 @@ function wireAnnotation() {
   window.addEventListener("pointermove", onAnnotMove);
   window.addEventListener("pointerup", onAnnotUp);
   window.addEventListener("pointercancel", onAnnotCancel);
+  stage.addEventListener("scroll", onStageScroll, { passive: true });
+  window.addEventListener("blur", edgePause);   // pause only: the gesture itself is not ours to end
 }
 
 function startAnnot() {
@@ -1072,6 +1182,7 @@ function startAnnot() {
   // Info-bar toggle stays available — toggling now shifts annotations to stay aligned.
 }
 function exitAnnot() {
+  edgeStop();
   annotating = false;
   liveAnnot = null;
   pendingSel = null;
@@ -1111,11 +1222,110 @@ function evtToImg(e) {
   };
 }
 
+/* ---- Edge auto-scroll ------------------------------------------------------
+ * Holding a stroke, a move or a handle drag near the stage edge (or past it)
+ * scrolls the stage and re-runs the pointer mapping, so a shape can reach
+ * something that is off screen. Bounded on purpose: it arms only after the
+ * pointer has really travelled, re-checks the gesture every frame, idles at the
+ * scroll limits, and clamps dt so a stalled frame never becomes a jump. It only
+ * ever writes scrollTop / scrollLeft - never zoom. */
+const EDGE_ZONE = 40;          // CSS px in from the stage's visible edge
+const EDGE_SPEED = 960;        // CSS px/s at the edge and past it = fpcSelectRegion's 16 px/frame at 60 Hz
+const EDGE_ARM = 4;            // CSS px of real pointer travel before it may start
+
+function edgeBegin(kind, e) {
+  edgeStop();
+  edge = { kind, id: e.pointerId, sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY,
+           armed: false, raf: 0, last: 0, ax: 0, ay: 0, mt: stage.scrollTop, ml: stage.scrollLeft };
+}
+function edgeStop() {
+  if (edge && edge.raf && typeof cancelAnimationFrame === "function") cancelAnimationFrame(edge.raf);
+  edge = null;
+}
+function edgePause() {
+  if (edge && edge.raf && typeof cancelAnimationFrame === "function") cancelAnimationFrame(edge.raf);
+  if (edge) { edge.raf = 0; edge.ax = edge.ay = 0; }
+}
+// Is the gesture this loop belongs to still the one in progress?
+function edgeLive() {
+  if (!edge) return false;
+  if (edge.kind === "crop") return cropping && !!dragStart;
+  if (!annotating || !annotCanvas || edge.id !== activePointerId) return false;
+  return !!drag || !!liveAnnot;
+}
+function edgeTrack(e) {
+  if (!edge || e.pointerId !== edge.id || !edgeLive()) return;
+  edge.x = e.clientX; edge.y = e.clientY;
+  if (!edge.armed && Math.hypot(e.clientX - edge.sx, e.clientY - edge.sy) >= EDGE_ARM) edge.armed = true;
+  edge.mt = stage.scrollTop; edge.ml = stage.scrollLeft;   // the caller maps at this scroll
+  if (e.buttons === 0) return;                             // the button is already up: never start
+  if (edge.armed && !edge.raf) edgeKick();
+}
+function edgeKick() {
+  if (typeof requestAnimationFrame !== "function") return;
+  edge.last = 0;
+  edge.raf = requestAnimationFrame(edgeTick);
+}
+// Speed along one axis: 0 outside the zone, easing in across it (the same quadratic
+// ramp as the in-page area select, background.js fpcSelectRegion), flat past the edge.
+// Negative = toward lo.
+function edgeAxis(p, lo, hi) {
+  const size = hi - lo;
+  if (!(size > 0) || !isFinite(p)) return 0;
+  const zone = Math.min(EDGE_ZONE, size / 4);        // a short stage is never all zone
+  const inLo = lo + zone - p, inHi = p - (hi - zone);
+  const d = inLo > 0 ? inLo : (inHi > 0 ? inHi : 0);
+  if (!d) return 0;
+  const t = Math.min(1, d / zone);
+  return (inLo > 0 ? -1 : 1) * EDGE_SPEED * t * t;
+}
+function edgeTick(now) {
+  if (!edge) return;
+  edge.raf = 0;
+  if (!edgeLive() || document.hidden) return;
+  if (typeof now !== "number") now = Date.now();
+  const dt = edge.last ? Math.min(50, Math.max(0, now - edge.last)) : 16;
+  edge.last = now;
+  const r = stage.getBoundingClientRect();
+  const top = r.top + (stage.clientTop || 0), left = r.left + (stage.clientLeft || 0);
+  let vy = edgeAxis(edge.y, top, top + stage.clientHeight);
+  let vx = edgeAxis(edge.x, left, left + stage.clientWidth);
+  const maxT = stage.scrollHeight - stage.clientHeight, maxL = stage.scrollWidth - stage.clientWidth;
+  // Only toward an edge the pointer has travelled toward since the press: fine-tuning a
+  // handle that sits in the zone, or dragging OUT of a zone, must never scroll.
+  if ((vy > 0 && !(edge.y > edge.sy)) || (vy < 0 && !(edge.y < edge.sy))) vy = 0;
+  if ((vx > 0 && !(edge.x > edge.sx)) || (vx < 0 && !(edge.x < edge.sx))) vx = 0;
+  if ((vy < 0 && stage.scrollTop <= 0) || (vy > 0 && !(stage.scrollTop < maxT - 1))) vy = 0;
+  if ((vx < 0 && stage.scrollLeft <= 0) || (vx > 0 && !(stage.scrollLeft < maxL - 1))) vx = 0;
+  if (!vx && !vy) { edge.ax = edge.ay = 0; return; }   // out of the zone or at the limit: idle until the pointer moves
+  // Whole pixels only, remainder carried: a slow crawl (0.4 px/frame) still arrives.
+  edge.ay += vy * dt / 1000; edge.ax += vx * dt / 1000;
+  const sy = Math.trunc(edge.ay), sx = Math.trunc(edge.ax);
+  edge.ay -= sy; edge.ax -= sx;
+  if (sy) stage.scrollTop = Math.max(0, Math.min(maxT, stage.scrollTop + sy));
+  if (sx) stage.scrollLeft = Math.max(0, Math.min(maxL, stage.scrollLeft + sx));
+  edgeRemap();
+  edge.raf = requestAnimationFrame(edgeTick);
+}
+// Re-run the move with the last real pointer position against the current
+// scroll and zoom. Idempotent: every move path is absolute from the press.
+function edgeRemap() {
+  if (!edgeLive()) return;
+  edge.mt = stage.scrollTop; edge.ml = stage.scrollLeft;
+  if (edge.kind === "crop") { if (cropOverlay._moveTo) cropOverlay._moveTo(edge.x, edge.y); return; }
+  annotMoveTo({ pointerId: edge.id, clientX: edge.x, clientY: edge.y, target: annotCanvas, synthetic: true });
+}
+// Anything else that scrolls the stage mid-gesture (wheel, keys, applyZoom's anchor).
+function onStageScroll() {
+  if (edge && edgeLive() && (stage.scrollTop !== edge.mt || stage.scrollLeft !== edge.ml)) edgeRemap();
+}
+
 function beginDrag(a, p, e, handle) {
   setActiveAnnot(a);
   if (pendingSel && annotTool !== "whiteout") { clearPendingSel(); }
   activePointerId = e.pointerId;
   try { annotCanvas.setPointerCapture(e.pointerId); } catch (_) {}
+  edgeBegin("annot", e);
   drag = { a: a, sx: p.x, sy: p.y, moved: false, handle: handle || null,
     orig: { x1: a.x1, y1: a.y1, x2: a.x2, y2: a.y2, bbox: annotBBox(a),
             points: a.points ? a.points.map((q) => ({ x: q.x, y: q.y })) : null } };
@@ -1128,6 +1338,7 @@ function onAnnotDown(e) {
   if (e.button !== 0 || !e.isPrimary) return;   // primary mouse button / first touch only
   if (liveAnnot) return;                         // one stroke at a time (ignore extra touches)
   e.preventDefault();
+  releaseControlFocus();
   const p = evtToImg(e);
   // A handle of the selected shape wins over everything else: that is a resize.
   if (activeAnnot && annotations.includes(activeAnnot)) {
@@ -1174,8 +1385,13 @@ function onAnnotDown(e) {
     type: annotTool, color: annotColor, width: annotWidth * dpr,
     x1: p.x, y1: p.y, x2: p.x, y2: p.y, points: [p]
   };
+  edgeBegin("annot", e);
 }
 function onAnnotMove(e) {
+  edgeTrack(e);
+  annotMoveTo(e);
+}
+function annotMoveTo(e) {
   if (drag && e.pointerId === activePointerId) {
     const p = evtToImg(e);
     const dx = p.x - drag.sx, dy = p.y - drag.sy;
@@ -1183,6 +1399,7 @@ function onAnnotMove(e) {
     if (!drag.moved) { if (Math.hypot(dx, dy) < 1) return; drag.moved = true; pushHistory(); activeTouched = true; }
     if (drag.handle) resizeAnnot(drag.a, drag.orig, drag.handle, dx, dy);
     else translateAnnot(drag.a, drag.orig, dx, dy);
+    markEdited();
     renderAnnots();
     return;
   }
@@ -1201,10 +1418,14 @@ function onAnnotMove(e) {
   if (e.pointerId !== activePointerId) return;
   const p = evtToImg(e);
   liveAnnot.x2 = p.x; liveAnnot.y2 = p.y;
-  if (liveAnnot.type === "pen" || liveAnnot.type === "highlight") liveAnnot.points.push(p);
+  if (liveAnnot.type === "pen" || liveAnnot.type === "highlight") {
+    const q = liveAnnot.points[liveAnnot.points.length - 1];
+    if (!e.synthetic || !q || q.x !== p.x || q.y !== p.y) liveAnnot.points.push(p);   // a remap with nothing new adds no point
+  }
   renderAnnots();
 }
 function onAnnotUp(e) {
+  if (!e || e.pointerId === activePointerId) edgeStop();
   if (drag && (!e || e.pointerId === activePointerId)) {
     cancelDrag();               // also restores the Select-tool cursor
     renderAnnots();
@@ -1228,6 +1449,7 @@ function onAnnotUp(e) {
 }
 function onAnnotCancel(e) {
   // Gesture taken over by the browser (scroll / pinch / palm) — discard the stroke.
+  if (!e || e.pointerId === activePointerId) edgeStop();
   if (drag && (!e || e.pointerId === activePointerId)) {
     if (drag.moved) translateAnnot(drag.a, drag.orig, 0, 0);   // the gesture was taken over: put it back
     cancelDrag();
@@ -1290,6 +1512,7 @@ function pushHistory() {
   if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
   redoStack = [];
   scheduleRecentSave();
+  markEdited();
 }
 
 // ---- Paint-style area selection -------------------------------------------
@@ -1352,6 +1575,7 @@ function touchActive() { if (!activeTouched) { pushHistory(); activeTouched = tr
 // dragged object (undo/redo/delete/clear/leaving annotate), or it keeps moving a ghost.
 function cancelDrag() {
   if (!drag) return;
+  edgeStop();
   try { if (annotCanvas && activePointerId != null) annotCanvas.releasePointerCapture(activePointerId); } catch (_) {}
   drag = null; activePointerId = null;
   applyToolCursor();
@@ -1379,6 +1603,7 @@ function applyActiveWidth() {
   const next = isLabel ? Math.max(16, annotWidth * dpr * 2.4) : annotWidth * dpr;
   if ((isLabel ? activeAnnot.size : activeAnnot.width) === next) return;   // no change, no undo step
   touchActive();
+  markEdited();              // touchActive pushes history only once per live-edit session
   if (isLabel) activeAnnot.size = next; else activeAnnot.width = next;
   renderAnnots();
 }
@@ -1386,6 +1611,7 @@ function applyActiveColour() {
   if (!activeAnnot || activeAnnot.type === "stamp") return;  // stamps keep their meaning-colour
   if (activeAnnot.color === annotColor) return;
   touchActive();
+  markEdited();
   activeAnnot.color = annotColor;
   renderAnnots();
 }
@@ -1780,6 +2006,7 @@ function annotUndo() {
   clearActiveAnnot();            // the snapshot holds fresh objects; the old reference is stale
   renderAnnots();
   scheduleRecentSave();
+  markEdited();
 }
 function annotRedo() {
   cancelDrag();
@@ -1789,6 +2016,7 @@ function annotRedo() {
   clearActiveAnnot();
   renderAnnots();
   scheduleRecentSave();
+  markEdited();
 }
 function annotClear() {
   cancelDrag();
@@ -1906,6 +2134,16 @@ function saveRecent() {
   try {
     if (!recentEnabled) return;                                      // nothing is kept unless the user opted in
     if (!baseSeg0 || segments.length !== 1 || captureTime) return;   // single-image captures only; never re-save a restored one
+    if (jobId && !recentJobChecked) {
+      // A reloaded editor re-streams the SAME job. Re-use its row (and bring its marks
+      // back) instead of adding a duplicate that pushes an older capture out of Recent.
+      recentJobChecked = true;
+      recentList().then((all) => {
+        const prior = all.find((r) => r.job === jobId);
+        if (prior && !rowHeldElsewhere(prior.id)) reattachRecent(prior); else saveRecent();   // a duplicated tab gets its own row
+      }, () => saveRecent());
+      return;
+    }
     const src = baseSeg0;
     const tw = 220, th = Math.min(400, Math.max(1, Math.round(src.height * tw / src.width)));
     const tc = document.createElement("canvas"); tc.width = tw; tc.height = th;
@@ -1916,7 +2154,7 @@ function saveRecent() {
     currentRecentId = id;                       // later annotation edits update THIS row
     src.toBlob((blob) => {
       if (!blob) return;
-      recentPut({ id, ts: id, title: m.title || "", url: m.url || "", dpr, w: src.width, h: src.height, env: m.env || null, thumb, blob, annots: [] }).catch(() => {});
+      recentPut({ id, ts: id, job: jobId || null, title: m.title || "", url: m.url || "", dpr, w: src.width, h: src.height, env: m.env || null, thumb, blob, annots: [] }).catch(() => {});
     }, "image/jpeg", 0.85);
   } catch (_) {}
 }
@@ -2021,6 +2259,7 @@ async function restoreRecent(id) {
   }
   reflectInfoBarBtn(); updateDims(); applyZoom();
   closeRecent();
+  bakedMarks = false; exportedClean = true; syncProtection();   // its marks are already in Recent
   const n = (rec.annots || []).length;
   toast("Reopened: " + (rec.title || "capture") + (n ? "  (" + n + " annotation" + (n > 1 ? "s" : "") + ")" : ""));
 }
@@ -2227,6 +2466,7 @@ async function uploadToDrive() {
     // by a Ctrl+C / Copy (which puts the image on the clipboard, replacing this link).
     const clBtn = el("copyLink"); if (clBtn) clBtn.hidden = false;
     ok = true;
+    markExported();
     toast("Uploaded ✓ (" + vis + ")" + (rootFallback ? ", to root" : "") +
       (copied ? " — link copied" : " — copy the link manually"));
     notifyDrive("Uploaded to Google Drive ✓",
@@ -2250,9 +2490,118 @@ async function uploadToDrive() {
   }
 }
 
+/* ------------------------- Work protection ------------------------- */
+// One rule for every editor. Work is "unsaved" until a Download, Copy or Drive send has
+// carried it out; any later edit makes it unsaved again. Print does not count: the print
+// dialog gives no way to tell Print from Cancel.
+//   - closing or reloading the tab asks "Leave site?" only when that work includes marks
+//     (live, or baked into the pixels by a Crop) - a plain capture never nags;
+//   - an unexported capture, marked or not, is not auto-discardable, so Memory Saver
+//     cannot drop it while the tester reproduces the bug. Exporting hands it back.
+function learnMyTab() {
+  try {
+    chrome.tabs.getCurrent().then((t) => { myTabId = t ? t.id : null; syncProtection(); }, () => {});
+  } catch (_) {}
+}
+function markEdited() { exportedClean = false; syncProtection(); }
+function markExported() { exportedClean = true; syncProtection(); }
+function openTextDraft() {
+  const i = document.querySelector(".annot-text-input");
+  return !!(i && String(i.value || "").trim());
+}
+function hasUnsavedMarks() {
+  if (!captureSettled || aborted) return false;
+  if (openTextDraft()) return true;    // typing is an edit no pushHistory has seen yet
+  if (exportedClean) return false;
+  return annotations.length > 0 || bakedMarks;
+}
+function needsDiscardGuard() { return captureSettled && !aborted && segments.length > 0 && !exportedClean; }
+function syncProtection() {
+  const want = needsDiscardGuard();
+  if (myTabId == null || want === discardGuardOn) return;
+  discardGuardOn = want;
+  // tabId is required: without it tabs.update targets the ACTIVE tab, not this one.
+  try { chrome.tabs.update(myTabId, { autoDiscardable: !want }).catch(() => {}); } catch (_) {}
+}
+function onBeforeUnload(e) {
+  if (!hasUnsavedMarks()) return;
+  e.preventDefault();
+  e.returnValue = true;      // legacy path; Chrome 119+ honours preventDefault alone
+}
+
+// A reloaded editor (F5, a tab the browser discarded, a restored session) usually finds
+// its job gone: the background keeps a capture only while its worker lives. With Recent
+// on, reopen this job's own saved copy; otherwise say plainly what happened.
+async function onExpired() {
+  if (recentEnabled) {
+    let prior = null;
+    try { prior = (await recentList()).find((r) => jobId && r.job === jobId); } catch (_) {}
+    if (prior) {
+      const shared = rowHeldElsewhere(prior.id);
+      settleCapture();
+      await restoreRecent(prior.id);
+      if (currentRecentId === prior.id) {
+        if (shared) currentRecentId = null;   // another open tab owns this row: show it, never write to it
+        toast("This tab was reloaded - reopened its saved copy from Recent");
+        return;
+      }
+    }
+  }
+  const why = document.wasDiscarded
+    ? "The browser closed this tab to save memory, and a capture lives only in its tab."
+    : "This tab was reloaded, and a capture lives only in its tab.";
+  showError(why + " Capture the page again." +
+    (recentEnabled ? " Captures you kept are under Recent." : ""), "This capture is no longer here");
+}
+// Is this Recent row the live document of another open editor (a duplicated tab)?
+function rowHeldElsewhere(id) {
+  try {
+    return chrome.extension.getViews({ type: "tab" }).some((v) => v !== window &&
+      typeof v.fpcEditorState === "function" && v.fpcEditorState().recentId === id);
+  } catch (_) { return false; }
+}
+function reattachRecent(prior) {
+  currentRecentId = prior.id;
+  const n = (prior.annots || []).length;
+  if (!n || annotations.length) return;
+  annotations = cloneAnnots(prior.annots);
+  if (infoBar) shiftAnnotList(annotations, infoBarHeight());
+  if (!annotCanvas) setupAnnotationLayer();
+  renderAnnots();
+  exportedClean = true;      // they came from storage, nothing new to lose yet
+  syncProtection();
+  toast("This tab was reloaded - brought back " + n + " mark" + (n > 1 ? "s" : "") + " from Recent");
+}
+
+// Read by the popup (chrome.extension.getViews) before "Update now" reloads the extension,
+// which closes every editor tab. Top-level function declarations are window properties.
+function fpcEditorState() {
+  return {
+    title: (meta && meta.title) || "",
+    capturing: !!jobId && !captureSettled,
+    failed: aborted,
+    hasImage: segments.length > 0,
+    marks: annotations.length + (openTextDraft() ? 1 : 0),
+    unsavedMarks: hasUnsavedMarks(),
+    unexported: needsDiscardGuard(),
+    inRecent: !!currentRecentId,
+    recentId: currentRecentId,
+    tabId: myTabId
+  };
+}
+// Commit a half-typed label and write marks to Recent before the extension reloads.
+// Returns a promise so the popup can wait for the IndexedDB write to land.
+function fpcBeforeReload() {
+  try { const a = document.activeElement; if (a && a.classList && a.classList.contains("annot-text-input")) a.blur(); } catch (_) {}
+  if (recentSaveTimer) { clearTimeout(recentSaveTimer); recentSaveTimer = null; }
+  if (!currentRecentId) return Promise.resolve();
+  try { return recentUpdateAnnots(currentRecentId, annotsForSave()).catch(() => {}); } catch (_) { return Promise.resolve(); }
+}
+
 /* ------------------------- UI bits ------------------------- */
-function showError(message) {
+function showError(message, title) {
   aborted = true; // stop any further tile drawing / finalize from racing over the error
+  { const t = document.querySelector(".error-title"); if (t) t.textContent = title || "Couldn\u2019t capture this page"; }
   settleCapture();
   progressWrap.hidden = true;
   stage.hidden = true;

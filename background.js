@@ -18,7 +18,9 @@ const SMOOTH_MS = 460;      // smooth-scroll glide per section (fills most of th
 
 // Job store: jobId -> { meta, tiles } | { error }
 const jobs = new Map();
-let jobCounter = 1;
+// Job ids name an editor tab (?job=<id>) and must never repeat: an MV3 worker is killed
+// when idle and re-runs this file, so a counter restarted at 1 and a reloaded editor could
+// claim the NEXT capture. A random UUID cannot collide across restarts.
 let lastCaptureAt = 0;
 // Tabs with a capture currently in flight — prevents two overlapping captures
 // (e.g. shortcut mashing) from corrupting each other's scroll/tiles.
@@ -854,7 +856,7 @@ async function countdown(seconds) {
 
 /* ------------------------------- Orchestration ------------------------------- */
 async function runCapture(tab, mode, delay) {
-  const jobId = String(jobCounter++);
+  const jobId = crypto.randomUUID();
   if (!tab) return openResult(jobId, { error: "No active tab." });
   if (isRestricted(tab.url)) {
     return openResult(jobId, {
@@ -997,7 +999,7 @@ chrome.runtime.onConnect.addListener((port) => {
     if (!msg || msg.type !== "ready") return;
     const job = jobs.get(msg.job);
     if (!job) {
-      port.postMessage({ type: "error", error: "This capture has expired. Please capture again." });
+      port.postMessage({ type: "error", code: "expired", error: "This capture has expired. Please capture again." });
       return;
     }
     if (job.error) {

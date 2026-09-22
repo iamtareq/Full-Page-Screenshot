@@ -1,4 +1,4 @@
 {
-  "version": "1.2.0",
-  "notes": "Redesigned editor: every drawing tool now lives in a rail down the left edge and is ready the moment a capture opens, so there is no Annotate button to press first. Blur's Size slider finally changes the blur, and zooming a long capture keeps your place instead of throwing it off the top."
+  "version": "1.2.1",
+  "notes": "Fixes: Ctrl+Z, Ctrl+S and tool keys keep working after you touch the Size or Quality slider; the stage scrolls by itself while you draw near its edge; closing a capture with unsaved marks now asks first; Update now lists open captures before it closes them; a dropped file no longer opens in the browser; a reloaded editor tab never shows someone else's capture."
 }
