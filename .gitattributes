@@ -1,0 +1,11 @@
+# Batch files must reach every PC with CRLF endings: cmd.exe mis-reads labels and
+# "goto" in an LF-only .cmd/.bat (the updater's .bat once printed "'ld' is not recognized").
+*.cmd text eol=crlf
+*.bat text eol=crlf
+# ...except the three that versions older than this file already have. Those versions check
+# them out with the PC's own line endings, and both sides of a rollback must match:
+# rollback.cmd rewrites itself and cmd resumes at the same byte offset, and a CRLF copy of an
+# unchanged file shows up as a local edit on v1.2.x. So these keep the PC's own endings.
+rollback.cmd !text !eol
+install-updater.cmd !text !eol
+updater/fpc-update-host.bat !text !eol

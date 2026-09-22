@@ -67,7 +67,10 @@ try {
     $sentinel = Join-Path $repo ".git\fpc-update-in-progress"
     $recovering = Test-Path $sentinel
 
-    $fetch = (Invoke-Git @("-C", "$repo", "fetch", "--prune", "origin")).Trim()
+    # --tags --force: a tag that was MOVED on GitHub (a re-written history) is refreshed here
+    # too. A tag DELETED on GitHub stays: only --prune-tags would remove it, and that would
+    # also delete any tag a teammate made themselves.
+    $fetch = (Invoke-Git @("-C", "$repo", "fetch", "--prune", "--tags", "--force", "origin")).Trim()
     if ($LASTEXITCODE -ne 0) {
       $payload = @{ ok = $false; repo = $repo; output = ("Fetch failed (offline / no access?):`n" + $fetch).Trim() }
     } else {

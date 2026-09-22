@@ -1,6 +1,6 @@
 @echo off
-setlocal enabledelayedexpansion
 cd /d "%~dp0"
+setlocal enabledelayedexpansion
 title Full Page Capture  -  go back to an earlier version
 
 echo ============================================
@@ -19,7 +19,7 @@ if errorlevel 1 (
   pause & exit /b
 )
 
-REM Local edits would be destroyed by the reset below, so refuse instead.
+REM Local edits would be destroyed by the reset below: refuse instead.
 for /f "delims=" %%D in ('git status --porcelain --untracked-files^=no') do set "DIRTY=1"
 if defined DIRTY (
   echo   You have local edits to the extension files:
@@ -32,11 +32,11 @@ if defined DIRTY (
   pause & exit /b
 )
 
-echo   Fetching the list of released versions...
-git fetch --tags --prune origin >nul 2>&1
-
 for /f "delims=" %%V in ('git describe --tags --exact-match 2^>nul') do set "NOW=%%V"
 if not defined NOW for /f "delims=" %%V in ('git rev-parse --short HEAD') do set "NOW=%%V (not a released version)"
+
+echo   Fetching the list of released versions...
+git fetch --tags -f --prune origin >nul 2>&1
 
 echo.
 echo   You are on:  !NOW!
