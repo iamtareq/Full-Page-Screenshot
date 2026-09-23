@@ -179,7 +179,9 @@ function onMeta(m, count) {
   if (aborted) return;
   meta = m;
   expected = count;
-  dpr = m.dpr || 1;
+  // A page that could not be scripted sends no dpr. The editor tab sits on the same screen,
+  // so its own devicePixelRatio is the same number the captured tab had.
+  dpr = m.dpr || window.devicePixelRatio || 1;
   scrollbarLeft = !!m.scrollbarLeft;
   progressTitle.textContent = m.mode === "visible" ? "Preparing screenshot…" : "Stitching screenshot…";
 
@@ -744,6 +746,7 @@ function finalize() {
   settleCapture();
   saveRecent();              // keep the last few captures so a closed tab isn't a lost capture
   syncProtection();          // an unexported capture must not be discarded
+  if (meta && meta.note) toast(meta.note);
   syncDocTitle();
   rosterChanged(true);       // other editors can offer this capture for joining now
   maybeSuggestJoin();        // ...and this one may offer the page captured just before

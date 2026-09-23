@@ -16,6 +16,14 @@ const RESULT_PAGE = "result.html";
 const CAPTURE_GAP_MS = 520; // minimum spacing between captureVisibleTab calls (quota is ~2/s)
 const SMOOTH_MS = 460;      // smooth-scroll glide per section (fills most of the capture gap)
 
+// Chrome draws its own error pages - a 404 with no body, a DNS or connection failure - in a
+// frame that no extension may script: chrome.scripting rejects with "Frame with ID 0 is showing
+// error page". Copying the screen is a different permission and still works, so a capture on
+// such a page falls back to the visible area instead of failing.
+const CANNOT_SCRIPT_RE = /showing error page|cannot be scripted|Cannot access contents|must request permission/i;
+const cannotScript = (e) => CANNOT_SCRIPT_RE.test((e && e.message) || String(e || ""));
+const ERROR_PAGE_NOTE = "This is one of Chrome's own error pages, where no extension may run: only what was on screen could be captured.";
+
 // Job store: jobId -> { meta, tiles } | { error }
 const jobs = new Map();
 // Job ids name an editor tab (?job=<id>) and must never repeat: an MV3 worker is killed
@@ -886,10 +894,15 @@ async function runCapture(tab, mode, delay) {
 
     if (mode === "visible") {
       const dataUrl = await captureVisible(windowId);
-      const m = (await exec(fpcVisibleMeta)) || { clientW: 0, clientH: 0, dpr: 1 };
+      // The pixels come from the browser, the page details from a script inside the page. On
+      // Chrome's own error pages the second half is refused - keep the screenshot anyway.
+      let m = null;
+      try { m = await exec(fpcVisibleMeta); } catch (e) { if (!cannotScript(e)) throw e; }
+      m = m || { clientW: 0, clientH: 0, dpr: null };
       setBadge("");
       return openResult(jobId, {
         meta: { mode: "visible", title: tab.title || "screenshot", url: tab.url, incognito: !!tab.incognito, dpr: m.dpr,
+          note: m.dpr ? undefined : ERROR_PAGE_NOTE,
           env: m.ua ? { ua: m.ua, vw: m.vw, vh: m.vh, dpr: m.dpr, loadMs: m.loadMs } : undefined },
         tiles: [{ dataUrl, x: 0, y: 0 }]
       });
@@ -979,7 +992,24 @@ async function runCapture(tab, mode, delay) {
   } catch (e) {
     setBadge("");
     try { await exec(fpcRestore); } catch (_) {}
-    return openResult(jobId, { error: (e && e.message) || "Capture failed. Please reload the page and try again." });
+    // A page no extension may script: Chrome's own error pages (404 with no body, DNS or
+    // connection failures). Nothing can be measured, scrolled or drawn on, so a full page and
+    // an area selection are both out - but the screen itself can still be copied, and an error
+    // page is exactly what a tester wants to put in a bug report. It is one screen tall anyway.
+    if (cannotScript(e) && mode !== "region") {
+      try {
+        const dataUrl = await captureVisible(windowId);
+        setBadge("");
+        return openResult(jobId, {
+          meta: { mode: "visible", title: tab.title || "screenshot", url: tab.url, incognito: !!tab.incognito,
+                  dpr: null, note: ERROR_PAGE_NOTE },
+          tiles: [{ dataUrl, x: 0, y: 0 }]
+        });
+      } catch (_) { /* fall through to the message below */ }
+    }
+    return openResult(jobId, { error: cannotScript(e)
+      ? "Chrome does not let any extension run on its own error pages, so this page cannot be captured here. Capture the visible area instead, or take the shot with Windows (Win+Shift+S)."
+      : ((e && e.message) || "Capture failed. Please reload the page and try again.") });
   } finally {
     capturingTabs.delete(tab.id);
   }
