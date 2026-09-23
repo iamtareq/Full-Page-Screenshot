@@ -1,4 +1,4 @@
 {
-  "version": "1.3.0",
-  "notes": "Join pages: capture a second page and the editor offers to join it with the one you just captured - side by side, both URL bars in one row, every mark still editable, and the file name keeps both page names. Ctrl+Z or Undo join takes it apart again. The Join button (J) also takes a page from another open capture, a dropped or chosen image file, or Ctrl+V. Also: Crop can be undone, turning the URL bar on or off no longer changes the capture time, editor tabs are named after their page, and a URL bar hidden under Blur or White out is no longer a clickable link in the PDF. update.cmd now updates exactly like Update now."
+  "version": "1.3.1",
+  "notes": "Fixes. A picture added from a file or with Ctrl+V is now fitted to the pages instead of being cut, and it no longer decides how tall the joined image is - a small picture used to chop a capture down to its own height, and a phone photo used to make the whole image huge. Take the tick out of Match heights to keep a picture at its full size. Chrome's own error pages (404 with no body, DNS or connection failures) can be captured again: no extension may run on them, so Full page and Visible area capture what is on screen and the editor says why."
 }

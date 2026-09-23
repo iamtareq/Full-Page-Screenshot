@@ -1061,26 +1061,51 @@ function layoutParts(d, env) {
   const docBarH = barHeightFor(parts.some((p) => live(p) && pageHasEnv(p)), hd);
   const minDpr = Math.min(...parts.map((p) => p.dpr || 1));
   const cuts = d.cuts || {}, floor = env.markFloor || {};
-  const cells = parts.map((p, i) => {
-    const scale = d.matchText ? minDpr / (p.dpr || 1) : 1;
+  const mk = (p, i, scale) => {
     const barH = live(p) ? docBarH : 0;
     const cw = Math.round(p.w * scale), fullCh = Math.round(p.h * scale);
     const f = floor[p.pid];
     const floorCh = (typeof f === "number" && isFinite(f)) ? Math.ceil(f * scale) + Math.round(JOIN_CLEAR_CSS * hd) : 0;
     const minKeep = Math.min(fullCh, Math.max(floorCh, Math.round(JOIN_MIN_KEEP_CSS * hd)));
-    const c = { pid: p.pid, i, scale, barH, cw, fullCh, minKeep, natural: barH + fullCh, keepCh: fullCh };
+    const c = { pid: p.pid, i, scale, barH, cw, fullCh, minKeep, natural: barH + fullCh, keepCh: fullCh, pic: isPicture(p) };
     const want = cuts[p.pid];
-    if (typeof want === "number" && want < p.h) c.keepCh = Math.max(minKeep, Math.round(want * scale));
+    if (!c.pic && typeof want === "number" && want < p.h) c.keepCh = Math.max(minKeep, Math.round(want * scale));
     return c;
-  });
+  };
+  let cells = parts.map((p, i) => mk(p, i, d.matchText ? minDpr / (p.dpr || 1) : 1));
   const row = d.dir !== "col";
-  const nat = cells.map((c) => c.natural);
-  const ratio = n > 1 ? Math.max(...nat) / Math.max(1, Math.min(...nat)) : 1;
-  const matchShown = row && n > 1 && Math.max(...nat) !== Math.min(...nat);
-  const matchOn = matchShown && (d.matchHeights == null ? ratio > JOIN_MATCH_RATIO : !!d.matchHeights);
-  if (matchOn) {
-    const T = Math.min(...nat);
-    for (const c of cells) if (c.natural > T + S) c.keepCh = Math.min(c.keepCh, Math.max(T - S - c.barH, c.minKeep));
+  // A picture added from a file or the clipboard is NOT a captured page: it has no length to
+  // scroll, and cutting a photo simply loses most of it. So a picture never decides how tall
+  // the row is, and instead of being cut it is scaled down to fit - never scaled up, which
+  // would only blur it. The captured pages decide the height between themselves, as before.
+  const pages = cells.filter((c) => !c.pic), pnat = pages.map((c) => c.natural);
+  const pageFloor = pnat.length ? Math.min(...pnat) : 0;
+  const ratio = pnat.length > 1 ? Math.max(...pnat) / Math.max(1, Math.min(...pnat)) : 1;
+  const picOut = pnat.length > 0 && cells.some((c) => c.pic && c.natural > pageFloor);
+  const matchShown = row && n > 1 && ((pnat.length > 1 && Math.max(...pnat) !== Math.min(...pnat)) || picOut);
+  // Two separate decisions. Cutting one PAGE down to another's height only pays when they are
+  // really different (D1: more than 1.5x) or when the tester asks for it - adding a picture must
+  // never take 80 px off a capture. Fitting a picture happens whenever it sticks out, and the
+  // tick box can still switch it off.
+  const asked = d.matchHeights != null;
+  const cutPages = row && pnat.length > 1 && (asked ? !!d.matchHeights : ratio > JOIN_MATCH_RATIO);
+  const fitPics = asked ? !!d.matchHeights : true;
+  const matchOn = matchShown && (cutPages || (picOut && fitPics));
+  if (cutPages) {
+    for (const c of pages) if (c.natural > pageFloor + S) c.keepCh = Math.min(c.keepCh, Math.max(pageFloor - S - c.barH, c.minKeep));
+  }
+  if (pnat.length) {
+    // side by side: fit a taller picture to the height the pages take. One under the other:
+    // fit a wider picture to the widest page, so a phone photo cannot blow up the whole image.
+    const target = cutPages ? pageFloor : Math.max(...pnat);
+    const colW = Math.max(...pages.map((c) => c.cw));
+    cells = cells.map((c) => {
+      if (!c.pic) return c;
+      const fit = row
+        ? (fitPics ? Math.min(1, Math.max(1, target - c.barH) / Math.max(1, c.fullCh)) : 1)
+        : Math.min(1, colW / Math.max(1, c.cw));
+      return fit < 1 ? mk(parts[c.i], c.i, c.scale * fit) : c;
+    });
   }
   let x = 0, y = 0, W = 0, H = 0;
   const rects = cells.map((c) => {
@@ -1112,7 +1137,7 @@ function cutToFit(d, env) {
     const p = d.parts[r.i], f = (env.markFloor || {})[p.pid];
     const fullCh = Math.round(p.h * r.scale);
     const floorCh = (typeof f === "number" && isFinite(f)) ? Math.ceil(f * r.scale) + Math.round(JOIN_CLEAR_CSS * hd) : 0;
-    return { pid: p.pid, scale: r.scale, barH: r.barH, fullCh, natural: r.barH + fullCh,
+    return { pid: p.pid, scale: r.scale, barH: r.barH, fullCh, natural: r.barH + fullCh, pic: isPicture(p),
              minKeep: Math.min(fullCh, Math.max(floorCh, Math.round(JOIN_MIN_KEEP_CSS * hd))) };
   });
   const hMax = Math.min(HARD_SEG_HEIGHT, Math.floor(MAX_AREA / L0.W), Math.floor(JOIN_MAX_PX / L0.W));
@@ -1123,7 +1148,7 @@ function cutToFit(d, env) {
   while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (total(mid) <= hMax) lo = mid; else hi = mid - 1; }
   const out = {};
   for (const c of cells) {
-    if (c.natural <= lo) continue;
+    if (c.pic || c.natural <= lo) continue;   // a picture is fitted, never cut
     const keepCh = Math.max(c.minKeep, lo - c.barH - S);
     if (keepCh + S < c.fullCh) out[c.pid] = Math.floor(keepCh / c.scale);
   }
@@ -1155,6 +1180,9 @@ function stepNumbers(list, rects) {
   return m;
 }
 
+// A page that came from a file or the clipboard, not from a capture: no URL bar, no length
+// to scroll, and it is fitted rather than cut (see layoutParts).
+function isPicture(p) { return p.origin === "file" || p.origin === "paste" || p.origin === "paste-copy"; }
 function pageLabel(p) {
   if (p.label) return p.label;                                  // title slice: the page's own part of the joined title
   if (p.meta && p.meta.title) return p.meta.title;
@@ -4805,7 +4833,9 @@ function arrangeNote() {
   return null;
 }
 function pageChipEl(p, i, n) {
-  const sub = p.pid === doc.hostPid ? " · this tab" : p.origin === "file" ? " · from a file" : (p.origin === "paste" || p.origin === "paste-copy") ? " · pasted" : p.origin === "recent" ? " · from Recent" : "";
+  const r = docLayout && docLayout.rects.find((q) => q.pid === p.pid);
+  const fitted = isPicture(p) && r && r.scale < 0.999 ? ", fitted" : "";
+  const sub = p.pid === doc.hostPid ? " · this tab" : p.origin === "file" ? " · from a file" + fitted : (p.origin === "paste" || p.origin === "paste-copy") ? " · pasted" + fitted : p.origin === "recent" ? " · from Recent" : "";
   const main = h("button", { class: "pc-main", type: "button", title: "Zoom to " + pageLabel(p) + " (0 fits the whole picture again)", onclick: () => zoomToPage(p.pid) },
     pageNo(i) + " ", h("span", { class: "pc-name", text: pageLabel(p) }), p.stampTime ? " · " + fmtClock(p.stampTime) : "", sub ? h("span", { class: "pc-sub", text: sub }) : null);
   const kids = [main];

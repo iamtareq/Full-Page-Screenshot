@@ -130,6 +130,7 @@
       • কোনো ছবি editor-এ টেনে ছাড়লে সেটা এখন <b style="color:var(--text)">এই capture-এর সাথে জুড়ে যায়</b> (নিচে Join দেখুন) — browser-এ খুলে গিয়ে capture হারায় না।<br>
       • <b style="color:var(--text)">Crop-ও এখন Ctrl+Z দিয়ে ফেরানো যায়।</b> URL bar on/off করলে capture-এর সময় আর বদলায় না।<br>
       • Editor tab-এর নামে এখন পাতার নাম দেখায় — অনেকগুলো capture খোলা থাকলে খুঁজে পাওয়া সহজ।<br>
+      • Chrome-এর নিজের <b style="color:var(--text)">error page</b> (404, DNS fail, connection refused) এখন capture করা যায়। ওখানে Chrome কোনো extension-কে script চালাতে দেয় না, তাই screen-এ যা আছে সেটুকু ওঠে আর editor নিচে কারণটা লিখে দেয়। <b style="color:var(--text)">Area</b> ওখানে কাজ করে না।<br>
       • উপরে <b style="color:var(--text)">URL + time bar</b> বসে (চাইলে toggle) — সাথে <i>Browser · OS · Viewport · DPR</i> লাইন, bug report-এর জন্য পারফেক্ট।<br>
       • Export: <b style="color:var(--text)">PNG / JPG / PDF</b> · Copy to clipboard · Print. <span style="color:var(--text)">PDF-এ URL-টা clickable থাকে।</span>
     </div>
@@ -159,6 +160,7 @@
       <tr><td class="k">Step ①②③</td><td class="v">দুই পাতা জুড়ে নম্বর একটানা চলে: A-র ①② আর B-র ①② হয়ে যায় ①②③④ — bar-এ লেখা থাকে।</td></tr>
       <tr><td class="k">Page chip ① ②</td><td class="v">Click করলে ওই পাতায় zoom হয় — arrow টানতে সুবিধা; <b>Fit</b> (<span class="kbd">0</span>) চাপলে আবার পুরো ছবি। ৩ বা বেশি পাতায় ◂ ▸ দিয়ে ক্রম বদল, × দিয়ে একটা পাতা সরানো।</td></tr>
       <tr><td class="k">URL bar button</td><td class="v">জোড়া ছবিতে প্রতি পাতার URL bar আলাদা করে on/off করা যায়।</td></tr>
+      <tr><td class="k">File বা <span class="kbd">Ctrl+V</span>-এর ছবি</td><td class="v">বাইরের ছবি "পাতা" নয়: ছবিটা কখনো কাটা পড়ে না, আর উচ্চতা কত হবে সেটাও সে ঠিক করে না। বড় ছবি নিজে থেকে ছোট হয়ে পাতার উচ্চতায় বসে (উপর-নিচে layout-এ পাতার প্রস্থে), ছোট ছবি নিজের মাপেই থাকে — chip-এ <i>fitted</i> লেখা থাকে। পুরো আকারে চাইলে <b>Match heights</b>-এর tick তুলে দিন।</td></tr>
       <tr><td class="k">Hide</td><td class="v">Bar ছোট করে এক লাইনে রাখে — Swap আর Undo join সেখানেও থাকে।</td></tr>
     </table>
     <div class="callout">
