@@ -467,6 +467,29 @@ body:has(#stage[hidden]) .arail { display: none; }
 .error-title { font-weight: 600; font-size: 16px; margin-bottom: 6px; }
 .error-msg { color: var(--muted); max-width: 440px; line-height: 1.55; }
 
+/* ====================== Edit a picture (opened with no capture) ======================
+   Same card as Progress and Error, but this one is asking for something, so the
+   action is the only solid thing on it and the two quieter ways in sit under it. */
+.pick-wrap { order: 2; flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; padding: 34px; }
+.pick-card {
+  background: var(--surface); border: 1px solid var(--rule); border-radius: var(--r2);
+  padding: 34px 40px 28px; max-width: 520px; text-align: center; box-shadow: var(--pop);
+  animation: rise .2s cubic-bezier(.2,.7,.3,1);
+}
+.pick-art { width: 40px; height: 40px; margin: 0 auto 14px; color: var(--accent); }
+.pick-art svg { width: 40px; height: 40px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.pick-title { font-size: 18px; font-weight: 600; letter-spacing: -.2px; }
+.pick-sub { margin: 8px auto 20px; color: var(--muted); line-height: 1.55; max-width: 410px; }
+.pick-btn { height: 38px; padding: 0 20px; font-size: 14px; }
+.pick-ways { margin-top: 16px; display: flex; flex-direction: column; gap: 7px; color: var(--muted); font-size: 13px; }
+.pick-ways b { color: var(--text); font-weight: 600; }
+.pick-key {
+  display: inline-block; min-width: 20px; padding: 1px 6px; margin: 0 2px;
+  border: 1px solid var(--rule); border-bottom-width: 2px; border-radius: 5px;
+  background: var(--surface-2); color: var(--text); font-size: 11px; font-weight: 600;
+}
+.pick-note { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--rule); color: var(--muted); font-size: 12px; }
+
 /* ============================ Toast ============================ */
 .toast {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(8px);

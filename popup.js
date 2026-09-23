@@ -22,6 +22,11 @@ document.getElementById("visible").addEventListener("click", () => start("visibl
 document.getElementById("region").addEventListener("click", () => start("region"));
 document.getElementById("element").addEventListener("click", () => start("element"));
 document.getElementById("scroller").addEventListener("click", () => start("scroller"));
+// Not a capture: this one opens the editor with nothing in it, ready for a file from this PC.
+document.getElementById("editPic").addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("result.html?open=picture") });
+  window.close();
+});
 
 /* ---- "More ways to capture" ------------------------------------------------
  * Collapsed on a fresh profile, and the choice sticks. It lives in storage.local,
@@ -84,7 +89,7 @@ moreBtn.addEventListener("click", () => {
  * bound and show only that. Nothing bound → no chip, instead of a label that lies. */
 const KBD = { "capture-full-page": "kbd-full", "capture-visible": "kbd-visible",
               "capture-area": "kbd-region", "capture-element": "kbd-element",
-              "capture-scroller": "kbd-scroller" };
+              "capture-scroller": "kbd-scroller", "edit-picture": "kbd-editpic" };
 try {
   chrome.commands.getAll((cmds) => {
     let bound = 0;

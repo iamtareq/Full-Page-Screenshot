@@ -1058,6 +1058,12 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 chrome.commands.onCommand.addListener(async (command) => {
+  // Editing a file from this PC has nothing to do with the page in front of you, so this one
+  // runs before activeTab() - it must work on a page no extension may touch, too.
+  if (command === "edit-picture") {
+    chrome.tabs.create({ url: chrome.runtime.getURL(RESULT_PAGE) + "?open=picture" });
+    return;
+  }
   const tab = await activeTab();
   if (command === "capture-full-page") runCapture(tab, "full");
   else if (command === "capture-visible") runCapture(tab, "visible");

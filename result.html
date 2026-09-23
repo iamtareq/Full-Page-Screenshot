@@ -222,6 +222,23 @@
       </div>
     </div>
 
+    <!-- Edit a picture: the editor was opened with no capture, waiting for a file -->
+    <div class="pick-wrap" id="pickWrap" hidden>
+      <div class="pick-card">
+        <div class="pick-art" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="16" rx="2"></rect><path d="M2.5 16.4 8 11l4.2 4 3-2.6 6.3 5.2"></path><circle cx="8.4" cy="8.7" r="1.5"></circle></svg>
+        </div>
+        <div class="pick-title">Edit a picture</div>
+        <div class="pick-sub">A screenshot someone sent you, a photo, anything already saved on this PC — open it here and use the same tools you use on a capture.</div>
+        <button class="tbtn primary pick-btn" id="pickBtn" type="button">Choose a picture…</button>
+        <div class="pick-ways">
+          <span>or <b>drop it anywhere</b> on this page</span>
+          <span>or press <span class="pick-key">Ctrl</span><span class="pick-key">V</span> to paste one</span>
+        </div>
+        <div class="pick-note">PNG, JPG, WebP, GIF or BMP. The picture never leaves this computer.</div>
+      </div>
+    </div>
+
     <!-- Stage -->
     <main class="stage" id="stage" hidden>
       <div class="canvas-host" id="canvasHost">

@@ -9,6 +9,7 @@ const HARD_SEG_HEIGHT = 16000;   // preferred max segment height (device px)
 
 const params = new URLSearchParams(location.search);
 const jobId = params.get("job");
+const wantPicture = params.get("open") === "picture";   // opened to edit a file, not a capture
 
 const el = (id) => document.getElementById(id);
 const stage = el("stage");
@@ -126,6 +127,7 @@ async function init() {
   if (!jobId) {
     settleCapture();
     if (params.get("recent") === "1") { progressWrap.hidden = true; openRecent(); return; }
+    if (wantPicture) { progressWrap.hidden = true; showPickPrompt(); return; }
     return showError("Missing capture reference. Please try capturing again.");
   }
 
@@ -253,6 +255,7 @@ function dragHasFiles(dt) {
 }
 // Why a picture can't be added right now, or null when it can.
 function ingestGate() {
+  if (awaitingPicture()) return ingestBusy ? "Still opening the last picture…" : null;
   if (stage.hidden && !(jobId && !captureSettled)) return "Open a capture first, then add a picture to it.";
   if (ingestBusy) return "Still adding the last picture…";
   return joinBlockedReason();
@@ -261,7 +264,7 @@ function ingestGate() {
 let dragDepth = 0, dragWatch = null;
 function showDropOverlay(reason) {
   const o = el("dropOverlay"); if (!o) return;
-  const m = el("dropMsg"); if (m) m.textContent = reason || "Drop to join with this capture";
+  const m = el("dropMsg"); if (m) m.textContent = reason || (awaitingPicture() ? "Drop to open this picture" : "Drop to join with this capture");
   o.classList.toggle("blocked", !!reason);
   o.hidden = false;
   clearTimeout(dragWatch);                    // backstop in case a dragleave is never delivered
@@ -278,7 +281,7 @@ function onDragOver(e) {
   e.preventDefault();                            // the page decides, so the browser never opens the drop
   const reason = files ? ingestGate() : null;
   try { if (dt) dt.dropEffect = files && !reason ? "copy" : "none"; } catch (_) {}
-  if (files && !stage.hidden) showDropOverlay(reason);
+  if (files && (!stage.hidden || awaitingPicture())) showDropOverlay(reason);
 }
 function onDragEnter(e) { if (dragHasFiles(e.dataTransfer)) dragDepth++; onDragOver(e); }
 function onDragLeave(e) {
@@ -326,7 +329,7 @@ function onPaste(e) {
         .map((i) => i.getAsFile()).filter(Boolean);
     }
   } catch (_) {}
-  if (stage.hidden) return;
+  if (stage.hidden && !awaitingPicture()) return;
   if (!files.length) { toast("Nothing to paste. Copy a picture first (Copy button or Win+Shift+S)."); return; }
   e.preventDefault();
   const reason = ingestGate();
@@ -434,9 +437,28 @@ function checkPixels(w, h) {
     throw new Error("That picture is too large to join (" + w + "×" + h + "). Capture just the part you need with " + areaHint() + ", then join it.");
   }
 }
-async function decodeBlob(blob) {
+// A phone photo is easily bigger than the canvas budget. Refusing it is no help when the picture
+// IS the job, so work out the size it has to come down to, keeping its shape. Beyond
+// PICTURE_HARD_PX even a resizing decode is a risk to the tab, so that is still a no.
+function fitPixels(w, h) {
+  if (!(w > 0 && h > 0)) throw new Error("That picture couldn't be read.");
+  if (w * h > PICTURE_HARD_PX || w > PICTURE_HARD_SIDE || h > PICTURE_HARD_SIDE) {
+    throw new Error("That picture is too large to open (" + w + "×" + h + ").");
+  }
+  if (w <= MAX_SIDE && h <= MAX_SIDE && w * h <= JOIN_MAX_PX) return null;   // fits as it is
+  const k = Math.min(MAX_SIDE / w, MAX_SIDE / h, Math.sqrt(JOIN_MAX_PX / (w * h)));
+  const fw = Math.max(1, Math.floor(w * k)), fh = Math.max(1, Math.floor(h * k));
+  return { w: fw, h: fh, from: { w: w, h: h } };
+}
+function shrunkNote(p) {
+  return p && p.shrunk
+    ? "“" + (p.title || p.name || "That picture") + "” was " + p.shrunk.w + "×" + p.shrunk.h +
+      " - too big for one image, so it was made smaller (" + p.w + "×" + p.h + ")."
+    : "";
+}
+async function decodeBlob(blob, fit) {
   try {
-    return await createImageBitmap(blob);
+    return await createImageBitmap(blob, fit ? { resizeWidth: fit.w, resizeHeight: fit.h, resizeQuality: "high" } : undefined);
   } catch (_) {
     const url = URL.createObjectURL(blob);
     try { const img = new Image(); img.src = url; await img.decode(); return img; }
@@ -460,25 +482,90 @@ async function readPicture(file, origin) {
   if (!dims && kind === "jpeg" && file.size > head.length) {
     dims = imageSize(new Uint8Array(await file.slice(0, 4 * 1024 * 1024).arrayBuffer()), kind);
   }
-  if (dims) checkPixels(dims.w, dims.h);        // refuse BEFORE decoding: a huge decode can crash the tab
+  let fit = dims ? fitPixels(dims.w, dims.h) : null;   // decide BEFORE decoding: a huge decode can crash the tab
   // Copy the bytes into memory: a dropped File is read lazily from disk and throws once the
   // file is moved or deleted, but the page is re-composed on every Swap / layout / undo.
   const blob = new Blob([await file.arrayBuffer()], { type: PICTURE_MIME[kind] });
   let bmp;
-  try { bmp = await decodeBlob(blob); } catch (_) { throw new Error(label + " couldn't be opened as a picture (the file may be damaged)."); }
-  const w = bmp.width || bmp.naturalWidth, h = bmp.height || bmp.naturalHeight;
+  try { bmp = await decodeBlob(blob, fit); } catch (_) { throw new Error(label + " couldn't be opened as a picture (the file may be damaged)."); }
+  let w = bmp.width || bmp.naturalWidth, h = bmp.height || bmp.naturalHeight;
   try {
-    checkPixels(w, h);
+    if (!fit) {                                  // the header never said how big it was
+      fit = fitPixels(w, h);
+      if (fit) {
+        const re = await decodeBlob(blob, fit);
+        if (bmp.close) bmp.close();
+        bmp = re; w = bmp.width; h = bmp.height;
+      }
+    }
+    let out = blob, shrunk = null;
+    if (fit) {
+      shrunk = fit.from;
+      out = await pictureBlob(bmp, kind);        // the smaller pixels, as the blob to re-compose from
+    }
     let fp = null;
     try { fp = fingerprint(bmp); } catch (_) {}
-    return { origin, blob, w, h, kind, name: (file && file.name) || "", fp };
+    return { origin, blob: out, w, h, kind, name: (file && file.name) || "", fp, shrunk };
   } finally { if (bmp.close) bmp.close(); }
 }
+// Re-encode a decoded bitmap: JPEG keeps a photo small, anything else stays lossless.
+async function pictureBlob(bmp, kind) {
+  const c = document.createElement("canvas");
+  c.width = bmp.width; c.height = bmp.height;
+  c.getContext("2d").drawImage(bmp, 0, 0);
+  const jpeg = kind === "jpeg";
+  return await canvasToBlob(c, jpeg ? "image/jpeg" : "image/png", jpeg ? 0.92 : undefined);
+}
+
+/* ---- Edit a picture: this editor was opened with no capture at all ---- */
+function showPickPrompt() {
+  const p = el("pickWrap"); if (p) p.hidden = false;
+  const b = el("pickBtn"); if (b) b.addEventListener("click", openJoinFilePicker);
+  try { document.title = "Edit a picture - Full Page Capture"; } catch (_) {}
+}
+function hidePickPrompt() { const p = el("pickWrap"); if (p) p.hidden = true; }
+// True while that prompt is up: the next picture becomes the image itself, not a joined page.
+function awaitingPicture() {
+  const p = el("pickWrap");
+  return !!p && !p.hidden && !segments.length;
+}
+// Install a picture from this PC as the image being edited - what finalize() leaves behind for a
+// capture, minus everything that belongs to a captured page: no address, no capture clock and no
+// live URL bar, because its pixels are all there is to show.
+async function openPictureBase(p) {
+  let bmp;
+  try { bmp = await createImageBitmap(p.blob); }
+  catch (_) { throw new Error("“" + (p.title || p.name || "That picture") + "” couldn't be opened."); }
+  const canvas = document.createElement("canvas");
+  canvas.width = bmp.width; canvas.height = bmp.height;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(bmp, 0, 0);
+  if (bmp.close) bmp.close();
+  hidePickPrompt();
+  canvasHost.insertBefore(canvas, cropOverlay);
+  segments = [{ canvas, ctx, startY: 0, height: canvas.height }];
+  fullWpx = canvas.width; fullHpx = canvas.height; truncated = false;
+  meta = { mode: "picture", title: p.title || fileTitle(p.name) || "Picture", url: "", dpr: 1, env: null };
+  dpr = 1;
+  captureTime = null;                       // not a restored capture: saveRecent keeps it like a fresh one
+  stampTime = new Date();
+  baseSeg0 = canvas; stampLocked = false; infoBarLink = null; aborted = false; wasCropped = false;
+  progressWrap.hidden = true; errorWrap.hidden = true; stage.hidden = false; tools.hidden = false;
+  const cb = el("crop"); if (cb) cb.disabled = false;
+  reflectInfoBarBtn(); updateDims(); applyZoom();
+  maybeAnnot();
+  settleCapture();
+  saveRecent();                             // closing this tab by mistake is not a lost edit
+  syncProtection();
+  syncDocTitle();
+  rosterChanged(true);                      // other editors may now join this picture
+}
+
 // A picture read from a file or the clipboard, as a join page. Its pixels are whatever the file
 // holds (a downloaded capture already has its URL bar and marks drawn in), so no live bar.
 function partFromPicture(p) {
   return { src: p.blob, w: p.w, h: p.h, dpr: dpr || 1, origin: p.origin,
-    meta: { title: p.title || "Picture", url: p.url || "", env: null },
+    meta: { title: p.title || "Picture", url: p.url || "", env: null, mode: "picture" },
     stampTime: p.stampTime ? new Date(p.stampTime) : null, barOn: false, barBaked: false, wasCropped: false,
     capKey: null, srcEditorId: p.srcEditorId || null };
 }
@@ -497,11 +584,28 @@ async function ingestFiles(files, origin) {
       } catch (err) { skipped.push(err.message || String(err)); }
     }
     if (!pages.length) { toast(skipped[0] || "Couldn't add that picture."); return; }
+    let base = null;
+    if (awaitingPicture()) {                    // nothing to join into: the first picture IS the image
+      for (const p of pages) Object.assign(p, fileOrder(p.name, Date.now()), { title: fileTitle(p.name) });
+      sortIncoming(pages);
+      base = pages.shift();
+      await openPictureBase(base);
+      if (!pages.length) {
+        toast(shrunkNote(base) || ("Editing “" + base.title + "” · " + base.w + "×" + base.h +
+          (skipped.length ? " · " + skipped[0] : "")));
+        return;
+      }
+    }
     const host = hostTime();
-    for (const p of pages) Object.assign(p, fileOrder(p.name, host), { title: fileTitle(p.name) });
+    const picHost = hostIsPicture();
+    pages.forEach((p, k) => {
+      Object.assign(p, fileOrder(p.name, host), { title: fileTitle(p.name) });
+      if (picHost && !p.nameClock) p.orderTime = host + 1 + k;   // no clock either side: the order they were opened in
+    });
     sortIncoming(pages);
     const res = await joinPages(pages.map((p) => ({ part: partFromPicture(p), marks: [], orderTime: p.orderTime })), { via: origin });
-    joinResultToast(res, { via: origin, skipped, names: pages.map((p) => p.title) });
+    joinResultToast(res, { via: origin, skipped, names: pages.map((p) => p.title),
+      notes: [base].concat(pages).map(shrunkNote).filter(Boolean) });
   } catch (err) {
     toast("Couldn't join: " + ((err && err.message) || err));
   } finally { ingestBusy = false; }
@@ -520,8 +624,13 @@ async function ingestPaste(file) {
     } else {
       Object.assign(page, { title: "Pasted picture", orderTime: host + 1 });
     }
+    if (awaitingPicture()) {                    // pasted into an empty editor: edit it as it is
+      await openPictureBase(page);
+      toast(shrunkNote(page) || ("Editing the pasted picture · " + page.w + "×" + page.h));
+      return;
+    }
     const res = await joinPages([{ part: partFromPicture(page), marks: [], orderTime: page.orderTime }], { via: "paste" });
-    joinResultToast(res, { via: "paste", names: [page.title] });
+    joinResultToast(res, { via: "paste", names: [page.title], notes: [shrunkNote(page)].filter(Boolean) });
   } catch (err) {
     toast(err.message || "Couldn't paste that picture.");
   } finally { ingestBusy = false; }
@@ -932,6 +1041,7 @@ function withInfoBar(base) {
 // Swap segments[0] between the pristine capture and the bar-stamped version.
 function applyInfoBar() {
   if (doc || !baseSeg0 || !segments[0]) return;   // a joined image draws one bar per page (composeCanvas)
+  if (isPictureDoc()) return;                     // a file from this PC: nothing to stamp on it
   if (!infoBar) infoBarLink = null; // withInfoBar (which sets it) won't run when off
   swapSeg0(infoBar ? withInfoBar(baseSeg0) : baseSeg0);
 }
@@ -955,6 +1065,11 @@ function reflectInfoBarBtn() {
     btn.disabled = false;
     btn.classList.toggle("on", doc.parts.some((p) => p.barOn && !p.barBaked));
     btn.title = "URL bar on each page…";
+    return;
+  }
+  if (isPictureDoc()) {
+    btn.classList.remove("on"); btn.disabled = true;
+    btn.title = "A picture from this PC has no address or time to show";
     return;
   }
   const disabled = stampLocked || segments.length !== 1;
@@ -1022,6 +1137,8 @@ const JOIN_STRIP_CSS = 28;         // "▼ <page> continues below (cut to fit)"
 const JOIN_CLEAR_CSS = 48;         // a cut never lands closer than this under a mark
 const JOIN_MIN_KEEP_CSS = 200;     // never cut a page to less than this (tiny partner guard)
 const JOIN_MAX_PX = 32000000;      // memory budget for the joined canvas
+const PICTURE_HARD_PX = 150000000; // above this even a resizing decode can take the tab down
+const PICTURE_HARD_SIDE = 65535;   // a JPEG cannot be wider or taller than this anyway
 const JOIN_MATCH_RATIO = 1.5;      // D1: Match heights defaults ON above this
 const JOIN_FILL = "#E2E6EA";
 const JOIN_STRIP_BG = "#475569", JOIN_STRIP_FG = "#F1F5F9";
@@ -1036,8 +1153,8 @@ function hostPart() {
   if (doc || segments.length !== 1 || !baseSeg0 || !captureSettled || aborted) return null;
   return {
     pid: hostPid, origin: "host", src: baseSeg0, w: baseSeg0.width, h: baseSeg0.height, dpr,
-    meta: { title: meta && meta.title, url: meta && meta.url, env: meta && meta.env },
-    stampTime: stampTime || captureTime, barOn: !stampLocked && infoBar, barBaked: stampLocked, wasCropped,
+    meta: { title: meta && meta.title, url: meta && meta.url, env: meta && meta.env, mode: meta && meta.mode },
+    stampTime: stampTime || captureTime, barOn: !stampLocked && infoBar && !isPictureDoc(), barBaked: stampLocked, wasCropped,
     legacy: { meta, infoBar, stampLocked, wasCropped, captureTime, stampTime, truncated, sectionCount }
   };
 }
@@ -1082,23 +1199,29 @@ function layoutParts(d, env) {
   const pageFloor = pnat.length ? Math.min(...pnat) : 0;
   const ratio = pnat.length > 1 ? Math.max(...pnat) / Math.max(1, Math.min(...pnat)) : 1;
   const picOut = pnat.length > 0 && cells.some((c) => c.pic && c.natural > pageFloor);
-  const matchShown = row && n > 1 && ((pnat.length > 1 && Math.max(...pnat) !== Math.min(...pnat)) || picOut);
+  const picNat = cells.filter((c) => c.pic).map((c) => c.natural);
+  // Only pictures, no captured page: nothing says what height this row "should" be.
+  const allPics = pnat.length === 0 && picNat.length > 1;
+  const picsDiffer = allPics && Math.max(...picNat) !== Math.min(...picNat);
+  const matchShown = row && n > 1 && ((pnat.length > 1 && Math.max(...pnat) !== Math.min(...pnat)) || picOut || picsDiffer);
   // Two separate decisions. Cutting one PAGE down to another's height only pays when they are
   // really different (D1: more than 1.5x) or when the tester asks for it - adding a picture must
-  // never take 80 px off a capture. Fitting a picture happens whenever it sticks out, and the
-  // tick box can still switch it off.
+  // never take 80 px off a capture. Fitting a picture happens whenever it sticks out of the pages,
+  // and the tick box can still switch it off. With no pages at all there is nothing to stick out
+  // of, so the pictures keep their own sizes until the tick box is ticked.
   const asked = d.matchHeights != null;
   const cutPages = row && pnat.length > 1 && (asked ? !!d.matchHeights : ratio > JOIN_MATCH_RATIO);
-  const fitPics = asked ? !!d.matchHeights : true;
-  const matchOn = matchShown && (cutPages || (picOut && fitPics));
+  const fitPics = asked ? !!d.matchHeights : !allPics;
+  const matchOn = matchShown && (cutPages || ((picOut || picsDiffer) && fitPics));
   if (cutPages) {
     for (const c of pages) if (c.natural > pageFloor + S) c.keepCh = Math.min(c.keepCh, Math.max(pageFloor - S - c.barH, c.minKeep));
   }
-  if (pnat.length) {
-    // side by side: fit a taller picture to the height the pages take. One under the other:
-    // fit a wider picture to the widest page, so a phone photo cannot blow up the whole image.
-    const target = cutPages ? pageFloor : Math.max(...pnat);
-    const colW = Math.max(...pages.map((c) => c.cw));
+  if (pnat.length || (row && allPics && fitPics)) {
+    // side by side: fit a taller picture to the height the pages take - or, with no pages, to the
+    // shortest picture. One under the other: fit a wider picture to the widest page, so a phone
+    // photo cannot blow up the whole image.
+    const target = pnat.length ? (cutPages ? pageFloor : Math.max(...pnat)) : Math.min(...picNat);
+    const colW = pnat.length ? Math.max(...pages.map((c) => c.cw)) : Infinity;
     cells = cells.map((c) => {
       if (!c.pic) return c;
       const fit = row
@@ -1182,7 +1305,17 @@ function stepNumbers(list, rects) {
 
 // A page that came from a file or the clipboard, not from a capture: no URL bar, no length
 // to scroll, and it is fitted rather than cut (see layoutParts).
-function isPicture(p) { return p.origin === "file" || p.origin === "paste" || p.origin === "paste-copy"; }
+// A picture rather than a captured page: a file, a paste, or the file this editor was opened on.
+function isPicture(p) {
+  return p.origin === "file" || p.origin === "paste" || p.origin === "paste-copy" ||
+    !!(p.meta && p.meta.mode === "picture");
+}
+// The page everything else is joined to is itself a picture from this PC.
+function hostIsPicture() {
+  if (!doc) return isPictureDoc();
+  const h = hostPartOfDoc();
+  return !!h && isPicture(h);
+}
 function pageLabel(p) {
   if (p.label) return p.label;                                  // title slice: the page's own part of the joined title
   if (p.meta && p.meta.title) return p.meta.title;
@@ -4438,6 +4571,8 @@ async function rollCall(ms) {
 }
 // The tab strip shows the page's name instead of "Full Page Capture" for every editor, so "the
 // Details Report tab" in the Join messages is a tab the tester can find.
+// The image being edited came from a file or the clipboard, not from a page.
+function isPictureDoc() { return !doc && !!meta && meta.mode === "picture"; }
 function syncDocTitle() {
   try { document.title = ((meta && meta.title) || "Capture") + " - Full Page Capture"; } catch (_) {}
 }
@@ -4929,8 +5064,10 @@ function joinResultToast(res, info) {
   try { const p = chrome.storage.local.set({ joinDismissStreak: 0 }); if (p && p.catch) p.catch(() => {}); } catch (_) {}
   const n = doc ? doc.parts.length : 1;
   const skipped = (info.skipped || []).length;
+  const notes = info.notes || [];
   const text = (info.via === "paste" ? "Pasted picture joined" : "Joined " + n + " pages") +
-    (skipped ? " · " + skipped + " file" + (skipped > 1 ? "s" : "") + " skipped: " + info.skipped[0] : "");
+    (skipped ? " · " + skipped + " file" + (skipped > 1 ? "s" : "") + " skipped: " + info.skipped[0] : "") +
+    (notes.length ? " · " + notes[0] : "");
   const entry = lastJoinEntry;
   showActionToast(text, "Undo join", () => { if (undoStack[undoStack.length - 1] === entry) annotUndo(); else undoJoin(); });
 }

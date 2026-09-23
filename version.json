@@ -1,4 +1,4 @@
 {
-  "version": "1.3.1",
-  "notes": "Fixes. A picture added from a file or with Ctrl+V is now fitted to the pages instead of being cut, and it no longer decides how tall the joined image is - a small picture used to chop a capture down to its own height, and a phone photo used to make the whole image huge. Take the tick out of Match heights to keep a picture at its full size. Chrome's own error pages (404 with no body, DNS or connection failures) can be captured again: no extension may run on them, so Full page and Visible area capture what is on screen and the editor says why."
+  "version": "1.4.0",
+  "notes": "New. Edit a picture: open the extension and pick 'Edit a picture' to work on a file already on this PC - a screenshot someone sent you on Teams or WhatsApp, a photo, anything. Choose it, drop it anywhere on the page, or press Ctrl+V to paste one straight from the chat, then use the same tools you use on a capture. A picture too big for one image is made smaller instead of refused, and Recent keeps it like any capture. You can give it a keyboard shortcut of its own under Shortcuts."
 }
