@@ -1,4 +1,4 @@
 {
-  "version": "1.4.0",
-  "notes": "New. Edit a picture: open the extension and pick 'Edit a picture' to work on a file already on this PC - a screenshot someone sent you on Teams or WhatsApp, a photo, anything. Choose it, drop it anywhere on the page, or press Ctrl+V to paste one straight from the chat, then use the same tools you use on a capture. A picture too big for one image is made smaller instead of refused, and Recent keeps it like any capture. You can give it a keyboard shortcut of its own under Shortcuts."
+  "version": "1.5.0",
+  "notes": "New. A browser window instead of the plain URL bar: the Window button next to URL bar stamps a Chrome-on-Windows top into the picture - a tab with the page title, an address bar with the URL (domain bright, the rest dim, 'Not secure' on http) and the capture time below it. The two are mutually exclusive, a joined picture takes one style for every page, captures under 320 px wide keep the plain bar, and it follows your light or dark theme. Off by default; turn it on for every capture under Settings."
 }

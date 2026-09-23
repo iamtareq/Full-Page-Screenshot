@@ -7,6 +7,7 @@ const DEFAULTS = {
   smoothScroll: true,
   infoBar: true,
   envBar: true,
+  windowTop: false,
   recentEnabled: false,          // opt-in: nothing is kept on disk until the user asks for it
   joinSuggest: true,             // the editor offers to join a page captured just before
   filenameTemplate: "{title}-{date}",
@@ -24,6 +25,7 @@ const els = {
   smoothScroll: document.getElementById("smoothScroll"),
   infoBar: document.getElementById("infoBar"),
   envBar: document.getElementById("envBar"),
+  windowTop: document.getElementById("windowTop"),
   recentEnabled: document.getElementById("recentEnabled"),
   joinSuggest: document.getElementById("joinSuggest"),
   filenameTemplate: document.getElementById("filenameTemplate"),
@@ -48,9 +50,16 @@ function reflectEnv() {
   // The environment line is part of the URL bar; with the bar off it has
   // nothing to be part of.
   if (!els.envBar || !els.infoBar) return;
-  els.envBar.disabled = !els.infoBar.checked;
+  const on = els.infoBar.checked;
+  els.envBar.disabled = !on;
   const row = els.envBar.closest(".row");
-  if (row) row.style.opacity = els.infoBar.checked ? "" : ".55";
+  if (row) row.style.opacity = on ? "" : ".55";
+  // Nothing is stamped at all with the bar off, so the style of the stamp is moot.
+  if (els.windowTop) {
+    els.windowTop.disabled = !on;
+    const wrow = els.windowTop.closest(".row");
+    if (wrow) wrow.style.opacity = on ? "" : ".55";
+  }
 }
 
 function reflect() {
@@ -87,6 +96,7 @@ async function load() {
   els.smoothScroll.checked = cfg.smoothScroll;
   els.infoBar.checked = cfg.infoBar;
   els.envBar.checked = cfg.envBar;
+  if (els.windowTop) els.windowTop.checked = cfg.windowTop === true;
   els.recentEnabled.checked = !!cfg.recentEnabled;
   els.joinSuggest.checked = cfg.joinSuggest !== false;
   els.filenameTemplate.value = cfg.filenameTemplate;
@@ -114,6 +124,7 @@ async function save() {
     smoothScroll: els.smoothScroll.checked,
     infoBar: els.infoBar.checked,
     envBar: els.envBar.checked,
+    windowTop: !!(els.windowTop && els.windowTop.checked),
     recentEnabled: els.recentEnabled.checked,
     joinSuggest: els.joinSuggest.checked,
     filenameTemplate: els.filenameTemplate.value.trim() || DEFAULTS.filenameTemplate,

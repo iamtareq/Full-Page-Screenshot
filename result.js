@@ -33,13 +33,14 @@ let received = 0, expected = 0;
 let zoom = null;             // null => fit-to-width
 let currentFormat = "png";
 let quality = 0.92;
-let defaultSettings = { format: "png", jpegQuality: 0.92, filenameTemplate: "{title}-{date}", infoBar: true, envBar: true };
+let defaultSettings = { format: "png", jpegQuality: 0.92, filenameTemplate: "{title}-{date}", infoBar: true, envBar: true, windowTop: false };
 let aborted = false;         // set once an unrecoverable error is shown
 let truncated = false;       // page was wider than the canvas limit
 let sectionCount = 0;        // scroll passes this capture was stitched from
 let wasCropped = false;      // the image on screen is a crop of the capture
 let scrollbarLeft = false;   // vertical scrollbar rendered on the left (RTL)
 let infoBar = true;          // stamp a URL + capture-time bar on top of the image
+let topStyle = "bar";        // which top: the slim "bar", or a "window" (browser chrome)
 let envBar = true;           // include a 2nd line with Browser/OS/Viewport/DPR
 let baseSeg0 = null;         // pristine top segment (without the info bar)
 let stampLocked = false;     // info-bar toggle frozen after crop / annotate
@@ -114,6 +115,7 @@ async function init() {
   quality = defaultSettings.jpegQuality || 0.92;
   infoBar = defaultSettings.infoBar !== false;
   envBar = defaultSettings.envBar !== false;
+  topStyle = defaultSettings.windowTop === true ? "window" : "bar";
   recentEnabled = defaultSettings.recentEnabled === true;   // strictly opt-in
   const rbtn = el("recentBtn"); if (rbtn) rbtn.hidden = !recentEnabled;
   el("quality").value = quality;
@@ -944,6 +946,20 @@ function fitText(ctx, str, maxW) {
   return lo > 0 ? str.slice(0, lo) + "…" : "";
 }
 
+// fitText's mirror: the ellipsis goes in FRONT, so the END of the string survives.
+function fitTextLeft(ctx, str, maxW) {
+  if (!str || maxW <= 0) return "";
+  if (ctx.measureText(str).width <= maxW) return str;
+  if (ctx.measureText("…").width > maxW) return "";
+  if (str.length > 4096) str = str.slice(-4096);
+  let lo = 0, hi = str.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (ctx.measureText("…" + str.slice(str.length - mid)).width <= maxW) lo = mid; else hi = mid - 1;
+  }
+  return lo > 0 ? "…" + str.slice(str.length - lo) : "";
+}
+
 function parseUA(ua) {
   ua = ua || ""; let m, browser = "", os = "";
   if ((m = ua.match(/Edg\/(\d+)/))) browser = "Edge " + m[1];
@@ -973,6 +989,7 @@ function hasEnvLine() { return pageHasEnv({ meta }); }
 // The page a single capture's bar describes: this editor's own capture.
 function selfPage() { return { meta, stampTime: stampTime || captureTime }; }
 
+function barTime(pg) { return (pg.stampTime || new Date()).toLocaleString(); }
 // Draws a URL + time bar for page pg, at (ox, oy), at scale d. Returns the URL's link rect in
 // the canvas's device px (for PDF links) or null. A single capture calls it with no page, no
 // offset and its own dpr, so its draw calls are exactly v1.2.0's.
@@ -995,7 +1012,7 @@ function drawInfoBar(ctx, w, barH, pg, d, ox, oy) {
   ctx.textBaseline = "middle";
   ctx.font = `600 ${fs}px system-ui, "Segoe UI", Arial, sans-serif`;
 
-  let timeStr = (pg.stampTime || new Date()).toLocaleString();
+  let timeStr = barTime(pg);
   let timeW = ctx.measureText(timeStr).width;
   let maxUrlW = w - pad * 3 - timeW;
   if (maxUrlW < 40) {           // bar too narrow for both — keep the URL, drop the time
@@ -1025,7 +1042,360 @@ function drawInfoBar(ctx, w, barH, pg, d, ox, oy) {
 }
 
 function barHeightFor(twoLine, d) { return Math.max(28, Math.round((twoLine ? 52 : 34) * d)); }
-function infoBarHeight() { return barHeightFor(hasEnvLine(), dpr); }
+
+/* ======================= The window top (a Chrome window on Windows 11) =======================
+ * A second way to stamp what the picture is: instead of the slim URL bar, a browser window top -
+ * tab strip with the page's title, address bar with its URL. It is a SIBLING of drawInfoBar with
+ * the same signature and the same return, so both stamping paths (withInfoBar for one capture,
+ * composeCanvas for one bar per joined page) call it through drawTop() and nothing else changes.
+ *
+ * The one rule that keeps the rest of the editor untouched: it adds height at the TOP ONLY.
+ * Every mark in this editor is moved by dy alone (shiftAnnotList), and crop, Recent and the undo
+ * snapshots all assume that. So: no outer shadow, no margin, no rounded outer corners - those
+ * would need width and a backdrop. It reads as a maximised window, which is the common case.
+ */
+const WT = {
+  strip: 40, tab: 34, tabW: 240, tabX: 6, shoulder: 10, topR: 10, cap: 46,
+  bar: 44, info: 30,
+  navC0: 20, navStep: 36, iconHalf: 14, gap: 8,
+  pillH: 32, pillTop: 6,
+  minW: 320, tabMinW: 600, fwdMinW: 420, starMinW: 560, avatarMinW: 860, puzzleMinW: 1000,
+  notSecureMinW: 700
+};
+const WT_H_FULL = (d) => Math.round(WT.strip * d) + Math.round(WT.bar * d) + Math.round(WT.info * d);
+const WT_H_ADDR = (d) => Math.round(WT.bar * d) + Math.round(WT.info * d);
+
+// Canvas cannot read CSS custom properties, so the browser's own colours live here. The
+// extension's teal deliberately never appears: the picture must read as a browser, not as us.
+const WIN_LIGHT = {
+  frame: "#DEE1E6", toolbar: "#FFFFFF", tabText: "#1F1F1F", icon: "#5F6368", cap: "#17181A",
+  pill: "#F1F3F4", url: "#202124", urlDim: "#5F6368", divider: "#BDC1C6",
+  avatar: "#BDC1C6", avatarInk: "#FFFFFF", time: "#3C4043", env: "#80868B", edge: "#B9BEC5",
+  fade0: "rgba(255,255,255,0)", fade1: "rgba(255,255,255,1)"
+};
+const WIN_DARK = {
+  frame: "#202124", toolbar: "#35363A", tabText: "#E8EAED", icon: "#C4C7C5", cap: "#E8EAED",
+  pill: "#202124", url: "#E8EAED", urlDim: "#9AA0A6", divider: "#5F6368",
+  avatar: "#5F6368", avatarInk: "#35363A", time: "#E8EAED", env: "#9AA0A6", edge: "#101114",
+  fade0: "rgba(53,54,58,0)", fade1: "rgba(53,54,58,1)"
+};
+function winColors(dark) { return dark ? WIN_DARK : WIN_LIGHT; }
+// result.css resolves dark through prefers-color-scheme with :root[data-theme] reserved; honour both.
+function darkUI() {
+  try {
+    const t = document.documentElement.getAttribute("data-theme");
+    if (t === "dark") return true;
+    if (t === "light") return false;
+    return !!(window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches);
+  } catch (_) { return false; }
+}
+
+// The width the chrome will be drawn at, in device px. Adding a top never changes width, so this
+// answers the same before and after a toggle - which toggleInfoBar and the Recent paths rely on.
+function topWidth() {
+  const c = baseSeg0 || (segments[0] && segments[0].canvas);
+  return c ? c.width : (fullWpx || 0);
+}
+// The ONE height entry point. Too narrow for a browser window -> the plain bar, at its own height,
+// so the measurer and the drawer can never disagree about what will be painted.
+function topHeightFor(style, twoLine, d, w) {
+  if (style !== "window" || !w || w < Math.round(WT.minW * d)) return barHeightFor(twoLine, d);
+  return (w >= Math.round(WT.tabMinW * d)) ? WT_H_FULL(d) : WT_H_ADDR(d);
+}
+function infoBarHeight() {
+  const style = (topStyle === "window" && !isPictureDoc()) ? "window" : "bar";
+  return topHeightFor(style, hasEnvLine(), dpr, topWidth());
+}
+
+/* ---- glyphs: authored once in a 16px box centred on (0,0), painted at any dpr ---- */
+function gly(ctx, cx, cy, d, o, draw) {
+  const lw = (o.lw == null ? 1.5 : o.lw);
+  const eff = Math.max(1, Math.round(lw * d * 2) / 2);        // the device px actually painted
+  const snap = (v) => (eff % 2 === 1 ? Math.round(v) + 0.5 : Math.round(v));
+  ctx.save();
+  ctx.translate(snap(cx), snap(cy));
+  ctx.scale(d, d);
+  ctx.lineWidth = eff / d;
+  ctx.lineCap = o.cap || "round";
+  ctx.lineJoin = "round";
+  ctx.strokeStyle = o.stroke || o.fill;
+  ctx.fillStyle = o.fill || o.stroke;
+  ctx.beginPath();
+  draw(ctx, o);
+  ctx.restore();
+}
+function head(c, x, y, a, s) {
+  c.moveTo(x, y);
+  c.lineTo(x + s * Math.cos(a + 2.6), y + s * Math.sin(a + 2.6));
+  c.lineTo(x + s * Math.cos(a - 2.6), y + s * Math.sin(a - 2.6));
+  c.closePath(); c.fill();
+}
+function rrPath(c, x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  if (c.roundRect) { c.roundRect(x, y, w, h, r); return; }
+  c.moveTo(x + r, y);
+  c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r);         c.arcTo(x, y, x + w, y, r); c.closePath();
+}
+// Chrome's tab silhouette: concave feet, rounded top. x0/x1 are the OUTER bottom extents.
+function tabPath(c, x0, y0, x1, y1, r, s) {
+  c.beginPath();
+  c.moveTo(x0, y1);
+  c.arc(x0, y1 - s, s, Math.PI / 2, 0, true);
+  c.lineTo(x0 + s, y0 + r);
+  c.arc(x0 + s + r, y0 + r, r, Math.PI, Math.PI * 1.5);
+  c.lineTo(x1 - s - r, y0);
+  c.arc(x1 - s - r, y0 + r, r, Math.PI * 1.5, 0);
+  c.lineTo(x1 - s, y1 - s);
+  c.arc(x1, y1 - s, s, Math.PI, Math.PI / 2, true);
+  c.closePath();
+}
+function gGlobe(c) { c.arc(0, 0, 6.4, 0, 6.2832); c.moveTo(-6.4, 0); c.lineTo(6.4, 0);
+  c.moveTo(0, -6.4); c.bezierCurveTo(3.6, -3.2, 3.6, 3.2, 0, 6.4);
+  c.bezierCurveTo(-3.6, 3.2, -3.6, -3.2, 0, -6.4); c.stroke(); }
+function gX(c) { c.moveTo(-4.2, -4.2); c.lineTo(4.2, 4.2);
+  c.moveTo(4.2, -4.2); c.lineTo(-4.2, 4.2); c.stroke(); }
+function gPlus(c) { c.moveTo(-6, 0); c.lineTo(6, 0); c.moveTo(0, -6); c.lineTo(0, 6); c.stroke(); }
+function gBack(c) { c.moveTo(6, 0); c.lineTo(-5.4, 0); c.stroke();
+  c.beginPath(); c.moveTo(-1.4, -4.6); c.lineTo(-6, 0); c.lineTo(-1.4, 4.6); c.stroke(); }
+function gFwd(c) { c.moveTo(-6, 0); c.lineTo(5.4, 0); c.stroke();
+  c.beginPath(); c.moveTo(1.4, -4.6); c.lineTo(6, 0); c.lineTo(1.4, 4.6); c.stroke(); }
+function gReload(c) { const r = 5.8, a0 = -Math.PI * 0.30;
+  c.arc(0, 0, r, a0, Math.PI * 1.28); c.stroke();
+  const px = r * Math.cos(a0), py = r * Math.sin(a0);
+  c.beginPath(); head(c, px + 1.2, py - 0.4, a0 + Math.PI / 2, 3.3); }
+function gLock(c) { c.arc(0, -2.3, 3.0, Math.PI, 6.2832); c.stroke();
+  c.beginPath(); rrPath(c, -4.7, -2.3, 9.4, 7.2, 1.6); c.fill(); }
+function gInfo(c) { c.arc(0, 0, 5.6, 0, 6.2832); c.stroke();
+  c.beginPath(); c.arc(0, -2.5, 0.95, 0, 6.2832); c.fill();
+  c.beginPath(); rrPath(c, -0.75, -0.7, 1.5, 4.0, 0.75); c.fill(); }
+function gStar(c) { for (let k = 0; k < 10; k++) { const rr = k % 2 ? 2.85 : 6.2, a = -Math.PI / 2 + k * Math.PI / 5;
+    const x = rr * Math.cos(a), y = rr * Math.sin(a); k ? c.lineTo(x, y) : c.moveTo(x, y); }
+  c.closePath(); c.stroke(); }
+function gKebab(c) { for (const y of [-5, 0, 5]) { c.beginPath(); c.arc(0, y, 1.6, 0, 6.2832); c.fill(); } }
+function gPuzzle(c) { const a = 5.6, r = 1.8, k = 2.2;     // one continuous stroked outline
+  c.moveTo(-a + r, -a); c.lineTo(-k, -a);
+  c.arc(0, -a, k, Math.PI, 0);
+  c.lineTo(a - r, -a); c.arcTo(a, -a, a, -a + r, r);
+  c.lineTo(a, a - r);  c.arcTo(a, a, a - r, a, r);
+  c.lineTo(-a + r, a); c.arcTo(-a, a, -a, a - r, r);
+  c.lineTo(-a, k);     c.arc(-a, 0, k, Math.PI / 2, -Math.PI / 2, true);
+  c.lineTo(-a, -a + r); c.arcTo(-a, -a, -a + r, -a, r);
+  c.closePath(); c.stroke(); }
+function gAvatar(c, o) { c.arc(0, 0, 7.6, 0, 6.2832); c.fill();
+  c.fillStyle = o.ink; c.beginPath(); c.arc(0, -2.2, 2.6, 0, 6.2832); c.fill();
+  c.beginPath(); c.moveTo(0, 3.6); c.arc(0, 3.6, 4.4, Math.PI * 1.15, Math.PI * 1.85); c.closePath(); c.fill(); }
+function gClock(c) { c.arc(0, 0, 5.2, 0, 6.2832); c.stroke();
+  c.beginPath(); c.moveTo(0, -2.9); c.lineTo(0, 0); c.lineTo(2.3, 0.9); c.stroke(); }
+
+/* ---- the URL, split the way Chrome shows it: everything but the domain is dimmed ---- */
+function splitUrl(raw) {
+  let u;
+  try { u = new URL(raw); } catch (_) { return { pre: "", dom: String(raw || ""), post: "", sec: 2 }; }
+  if (u.protocol !== "https:" && u.protocol !== "http:")          // chrome:, file:, data:, blob:
+    return { pre: "", dom: String(raw || ""), post: "", sec: 2 };
+  const userinfo = u.username ? u.username + (u.password ? ":" + u.password : "") + "@" : "";
+  const host = u.hostname;
+  const isIp = /^\[|^\d{1,3}(\.\d{1,3}){3}$/.test(host);
+  const bare = isIp ? host : host.replace(/^www\./i, "");         // only a LEADING www.
+  let dom = bare;
+  if (!isIp) {
+    const L = bare.split(".");
+    if (L.length > 2) {
+      const two = /^(co|com|net|org|gov|edu|ac|ne|or|gr|mil|sch)\.[a-z]{2}$/i;   // co.uk, com.bd
+      dom = L.slice(-(two.test(L.slice(-2).join(".")) ? 3 : 2)).join(".");
+    }
+  }
+  // https:// is hidden as Chrome hides it; http:// is kept and dimmed - a QA picture must still
+  // prove the page was not on https.
+  const scheme = (u.protocol === "http:" || userinfo) ? u.protocol + "//" : "";
+  const sub = bare.slice(0, bare.length - dom.length);
+  const path = u.pathname === "/" ? "" : u.pathname;
+  return { pre: scheme + userinfo + sub, dom, post: (u.port ? ":" + u.port : "") + path + u.search + u.hash,
+           sec: u.protocol === "https:" ? 1 : 0 };
+}
+// A subdomain's TAIL identifies the host (ums-portal-1 vs -3) so it truncates from the left; a
+// path's HEAD identifies the page so it truncates from the right; the domain is never cut while
+// it fits at all.
+function fitUrl(ctx, u, maxW) {
+  const m = (t) => (t ? ctx.measureText(t).width : 0);
+  const wPre = m(u.pre), wDom = m(u.dom), wPost = m(u.post);
+  if (wPre + wDom + wPost <= maxW) return { pre: u.pre, dom: u.dom, post: u.post };
+  if (wDom <= maxW) {
+    const free = maxW - wDom;
+    let wantPost = Math.min(wPost, Math.round(free * 0.6)), wantPre = free - wantPost;
+    if (wPre <= wantPre) { wantPre = wPre; wantPost = free - wPre; }
+    else if (wPost <= wantPost) { wantPost = wPost; wantPre = free - wPost; }
+    return { pre: fitTextLeft(ctx, u.pre, wantPre), dom: u.dom, post: fitText(ctx, u.post, wantPost) };
+  }
+  return { pre: "", dom: fitText(ctx, u.dom, maxW), post: "" };
+}
+
+// Sibling of drawInfoBar: same signature, same return (the URL's link rect for the PDF export).
+function drawWindowTop(ctx, w, h, pg, d, ox, oy) {
+  pg = pg || selfPage(); d = d || dpr; ox = ox || 0; oy = oy || 0;
+  const R = (n) => Math.round(n * d);
+  const pm = pg.meta || {};
+  const tbH = R(WT.bar), infoH = R(WT.info);
+
+  // Too narrow, or a height that cannot hold a window: today's bar, unchanged. The floor is
+  // EXACTLY the address-only tier (WT_H_ADDR) - any slack above it and the measurer would promise
+  // a window at a height the drawer then refuses to paint.
+  if (w < R(WT.minW) || h < tbH + infoH) return drawInfoBar(ctx, w, h, pg, d, ox, oy);
+
+  const C = winColors(darkUI());
+  const hair = Math.max(1, R(1));
+  const F = (wt, px) => wt + " " + px + "px system-ui, \"Segoe UI\", Arial, sans-serif";
+
+  // Rows are bottom-anchored and the tab strip is capped, so a height measured at another width
+  // can only add grey - it can never stretch the tab or overflow the picture.
+  const rest = h - tbH - infoH;
+  let stripH = (w >= R(WT.tabMinW)) ? Math.min(rest, R(WT.strip)) : 0;
+  if (stripH < R(30)) stripH = 0;
+  const slack = rest - stripH;
+  const stripY = slack, tbY = rest, infoY = rest + tbH;
+  let link = null;
+
+  ctx.save();
+  if (ox || oy) ctx.translate(ox, oy);
+  ctx.beginPath(); ctx.rect(0, 0, w, h); ctx.clip();        // nothing may bleed into the page
+  ctx.textBaseline = "middle";
+
+  if (tbY > 0) { ctx.fillStyle = C.frame; ctx.fillRect(0, 0, w, tbY); }
+  ctx.fillStyle = C.toolbar; ctx.fillRect(0, tbY, w, tbH + infoH);   // tab and toolbar: one colour
+
+  if (stripH) {
+    const capW = R(WT.cap), capCy = stripY + Math.round(stripH / 2);
+    const capX = [w - R(138), w - R(92), w - R(46)];
+    const clw = Math.max(1, R(1)), sn = (v) => Math.round(v) + (clw % 2 ? 0.5 : 0), q = R(5);
+    ctx.save();                                   // caption glyphs are drawn in DEVICE space, so
+    ctx.lineWidth = clw; ctx.lineCap = "butt";    // a 1px Windows hairline stays a 1px hairline
+    ctx.lineJoin = "miter"; ctx.strokeStyle = C.cap;
+    for (let k = 0; k < 3; k++) {
+      const cx = capX[k] + Math.round(capW / 2);
+      ctx.beginPath();
+      if (k === 0) { ctx.moveTo(cx - q, sn(capCy)); ctx.lineTo(cx + q, sn(capCy)); ctx.stroke(); }
+      else if (k === 1) { ctx.strokeRect(sn(cx - q), sn(capCy - q), 2 * q, 2 * q); }
+      else { ctx.moveTo(sn(cx - q), sn(capCy - q)); ctx.lineTo(sn(cx + q), sn(capCy + q));
+             ctx.moveTo(sn(cx + q), sn(capCy - q)); ctx.lineTo(sn(cx - q), sn(capCy + q)); ctx.stroke(); }
+    }
+    ctx.restore();
+
+    const tabX = R(WT.tabX), sh = R(WT.shoulder), tr = R(WT.topR);
+    const avail = (w - R(138)) - R(12) - (R(28) + R(8)) - tabX;
+    const tabW = Math.min(R(WT.tabW), Math.max(R(120), avail));
+    const tabTop = Math.max(stripY, tbY - R(WT.tab));
+    if (tbY - tabTop >= R(24) && tabW > 2 * sh + 2 * tr) {
+      const midY = tabTop + Math.round((tbY - tabTop) / 2);
+      ctx.fillStyle = C.toolbar;
+      tabPath(ctx, tabX, tabTop, tabX + tabW, tbY, tr, sh);
+      ctx.fill();
+      gly(ctx, tabX + sh + R(18), midY, d, { stroke: C.icon, lw: 1.15 }, gGlobe);
+      const closeCx = tabX + tabW - sh - R(18);
+      const titleX = tabX + sh + R(34), titleMaxW = closeCx - R(9) - titleX;
+      if (titleMaxW >= R(24)) {
+        // Chrome FADES a long tab title rather than cutting it - and a fade cannot split a
+        // Bengali base+matra pair the way a slice() can.
+        const title = pageLabel(pg);
+        ctx.font = F(400, R(12)); ctx.fillStyle = C.tabText;
+        ctx.save();
+        ctx.beginPath(); ctx.rect(titleX, tabTop, titleMaxW, tbY - tabTop); ctx.clip();
+        ctx.fillText(title, titleX, midY);
+        if (ctx.measureText(title).width > titleMaxW) {
+          // The fade is decoration: if a gradient cannot be made the title is simply clipped.
+          // It must never throw - this runs inside composeCanvas, and a throw there rolls the
+          // whole join back.
+          const f = R(18);
+          let g = null;
+          try { g = ctx.createLinearGradient(titleX + titleMaxW - f, 0, titleX + titleMaxW, 0); } catch (_) {}
+          if (g && typeof g.addColorStop === "function") {
+            g.addColorStop(0, C.fade0); g.addColorStop(1, C.fade1);
+            ctx.fillStyle = g; ctx.fillRect(titleX + titleMaxW - f, tabTop, f, tbY - tabTop);
+          }
+        }
+        ctx.restore();
+      }
+      gly(ctx, closeCx, midY, d, { stroke: C.icon, lw: 1.5 }, gX);
+      const plusCx = tabX + tabW - sh + R(22);
+      if (plusCx + R(14) <= capX[0] - R(8)) gly(ctx, plusCx, midY, d, { stroke: C.icon, lw: 1.6 }, gPlus);
+    }
+  }
+
+  const iconCy = tbY + Math.round(tbH / 2);
+  const nav = ["back"]; if (w >= R(WT.fwdMinW)) nav.push("fwd"); nav.push("reload");
+  nav.forEach((n, i) => {
+    gly(ctx, R(WT.navC0) + i * R(WT.navStep), iconCy, d, { stroke: C.icon, fill: C.icon, lw: 1.6 },
+        n === "back" ? gBack : n === "fwd" ? gFwd : gReload);
+  });
+  const pillL = R(WT.navC0) + (nav.length - 1) * R(WT.navStep) + R(WT.iconHalf) + R(WT.gap);
+
+  // The right-hand icons are drawn first: the address pill ends where the leftmost of them starts,
+  // so shedding one at a narrow width simply gives the pill the space.
+  let leftMost = w - R(20);
+  gly(ctx, leftMost, iconCy, d, { fill: C.icon }, gKebab);
+  if (w >= R(WT.avatarMinW)) { leftMost = w - R(56); gly(ctx, leftMost, iconCy, d, { fill: C.avatar, ink: C.avatarInk }, gAvatar); }
+  if (w >= R(WT.puzzleMinW)) { leftMost = w - R(92); gly(ctx, leftMost, iconCy, d, { stroke: C.icon, lw: 1.4 }, gPuzzle); }
+  const pillR = leftMost - R(WT.iconHalf) - R(WT.gap);
+
+  const pillY = tbY + R(WT.pillTop), pillH = R(WT.pillH);
+  const pillW = Math.max(R(40), pillR - pillL);
+  const pillCy = pillY + Math.round(pillH / 2);
+  ctx.fillStyle = C.pill;
+  ctx.beginPath(); rrPath(ctx, pillL, pillY, pillW, pillH, pillH / 2); ctx.fill();
+
+  const u = splitUrl(pm.url || "");
+  gly(ctx, pillL + R(17), pillCy, d, { stroke: C.icon, fill: C.icon, lw: 1.35 }, u.sec === 1 ? gLock : gInfo);
+  const star = w >= R(WT.starMinW);
+  if (star) gly(ctx, pillR - R(18), pillCy, d, { stroke: C.icon, lw: 1.5 }, gStar);
+
+  let urlX = pillL + R(34);
+  let urlMaxW = (star ? pillR - R(18) - R(12) : pillR - R(12)) - urlX;
+  if (u.sec === 0 && w >= R(WT.notSecureMinW)) {
+    ctx.font = F(400, R(12.5)); ctx.fillStyle = C.urlDim;
+    const lab = "Not secure", labW = ctx.measureText(lab).width;
+    if (labW + R(22) < urlMaxW * 0.6) {
+      ctx.fillText(lab, urlX, pillCy);
+      ctx.fillStyle = C.divider;
+      ctx.fillRect(urlX + labW + R(10), pillCy - R(8), Math.max(1, R(1)), R(16));
+      const used = labW + R(21);
+      urlX += used; urlMaxW -= used;
+    }
+  }
+  ctx.font = F(400, R(14));
+  if (u.dom || u.pre || u.post) {
+    const runs = fitUrl(ctx, u, urlMaxW);
+    let x = urlX;
+    const put = (t, col) => { if (!t) return; ctx.fillStyle = col; ctx.fillText(t, x, pillCy); x += ctx.measureText(t).width; };
+    put(runs.pre, C.urlDim);
+    put(runs.dom, C.url);
+    put(runs.post, C.urlDim);
+    if (pm.url && x > urlX) link = { x: ox + urlX, y: oy + pillY, w: Math.min(x - urlX, urlMaxW), h: pillH, uri: pm.url };
+  }
+
+  // The capture clock is never dropped - it is half of what this stamp is for.
+  const icy = infoY + Math.round(infoH / 2);
+  gly(ctx, R(18), icy, d, { stroke: C.time, lw: 1.25 }, gClock);
+  ctx.font = F(500, R(12)); ctx.fillStyle = C.time;
+  const tStr = fitText(ctx, "Captured " + barTime(pg), w - R(30) - R(12));
+  if (tStr) ctx.fillText(tStr, R(30), icy);
+  const tW = tStr ? ctx.measureText(tStr).width : 0;
+  if (pageHasEnv(pg)) {
+    ctx.font = F(400, R(11.5)); ctx.fillStyle = C.env;
+    const maxE = w - (R(30) + tW) - R(16) - R(12);
+    const e = maxE >= R(40) ? fitText(ctx, formatEnv(pm.env), maxE) : "";
+    if (e) ctx.fillText(e, w - R(12) - ctx.measureText(e).width, icy);
+  }
+
+  ctx.fillStyle = C.edge; ctx.fillRect(0, h - hair, w, hair);   // the chrome/page boundary
+  ctx.restore();
+  return link;
+}
+
+// The one dispatcher both stamping paths use.
+function drawTop(ctx, w, h, pg, d, ox, oy, style) {
+  return (style === "window") ? drawWindowTop(ctx, w, h, pg, d, ox, oy)
+                              : drawInfoBar(ctx, w, h, pg, d, ox, oy);
+}
 
 function withInfoBar(base) {
   const barH = infoBarHeight();
@@ -1033,7 +1403,7 @@ function withInfoBar(base) {
   out.width = base.width;
   out.height = base.height + barH;
   const ctx = out.getContext("2d");
-  infoBarLink = drawInfoBar(ctx, out.width, barH);
+  infoBarLink = drawTop(ctx, out.width, barH, null, null, 0, 0, topStyle);
   ctx.drawImage(base, 0, barH);
   return out;
 }
@@ -1058,12 +1428,13 @@ function swapSeg0(target) {
   pixRev++;
 }
 
-function reflectInfoBarBtn() {
+function reflectInfoBarBtn() { reflectBarBtn(); reflectWindowBtn(); }
+function reflectBarBtn() {
   const btn = el("infobar");
   if (!btn) return;
   if (doc) {
     btn.disabled = false;
-    btn.classList.toggle("on", doc.parts.some((p) => p.barOn && !p.barBaked));
+    btn.classList.toggle("on", doc.parts.some((p) => p.barOn && !p.barBaked) && (doc.topStyle || "bar") === "bar");
     btn.title = "URL bar on each page…";
     return;
   }
@@ -1073,13 +1444,40 @@ function reflectInfoBarBtn() {
     return;
   }
   const disabled = stampLocked || segments.length !== 1;
-  btn.classList.toggle("on", infoBar);
+  btn.classList.toggle("on", infoBar && topStyle === "bar");
   btn.disabled = disabled;
   btn.title = segments.length !== 1
     ? "URL/time bar can't be toggled on a multi-part image"
     : stampLocked
       ? "URL/time bar is locked after cropping"
-      : (infoBar ? "URL + time bar is ON — click to remove" : "Add a bar with the page URL and capture time");
+      : (infoBar && topStyle === "bar" ? "URL + time bar is ON — click to remove" : "Add a bar with the page URL and capture time");
+}
+// The window button mirrors it: same gates, the other style. Narrow captures say so before the
+// click, because there the window quietly falls back to the plain bar.
+function reflectWindowBtn() {
+  const btn = el("windowtop");
+  if (!btn) return;
+  if (doc) {
+    btn.disabled = false;
+    btn.classList.toggle("on", doc.parts.some((p) => p.barOn && !p.barBaked) && (doc.topStyle || "bar") === "window");
+    btn.title = "Browser window on each page…";
+    return;
+  }
+  if (isPictureDoc()) {
+    btn.classList.remove("on"); btn.disabled = true;
+    btn.title = "A picture from this PC has no address to show";
+    return;
+  }
+  const on = infoBar && topStyle === "window";
+  btn.classList.toggle("on", on);
+  btn.disabled = stampLocked || segments.length !== 1;
+  btn.title = segments.length !== 1
+    ? "A browser window can't be drawn on a multi-part image"
+    : stampLocked
+      ? "The top is locked after cropping"
+      : topWidth() && topWidth() < Math.round(WT.minW * dpr)
+        ? "Too narrow for a browser window — the plain URL bar is used"
+        : (on ? "Browser window is ON — click to remove" : "Draw a browser window top (tab + address bar) into the picture");
 }
 
 // Shift every annotation's Y by dy (used when the top bar is added/removed).
@@ -1096,17 +1494,18 @@ function shiftAnnotations(dy) {
   shiftAnnotList(annotations, dy);   // history entries carry their own rects; a restore remaps them
 }
 
-function toggleInfoBar() {
+// One switch for both tops. The marks move by the DIFFERENCE between the old and the new top,
+// so bar -> window (or either -> off) is the same arithmetic as the old on/off toggle.
+function setTopStyle(next) {
   if (doc) { toggleBarMenu(); return; }   // joined: one bar per page, in a menu
   if (stampLocked || segments.length !== 1 || docBusy) return;
-  const barH = infoBarHeight();
-  const turningOn = !infoBar;
-  infoBar = !infoBar;
+  const oldH = infoBar ? infoBarHeight() : 0;
+  infoBar = next !== "off";
+  if (infoBar) topStyle = next;
   applyInfoBar();
-  // The image just grew/shrank by barH at the top — keep annotations aligned by
-  // shifting them the same amount and resizing the annotation layer to match.
+  const dy = (infoBar ? infoBarHeight() : 0) - oldH;
   if (annotCanvas) {
-    shiftAnnotations(turningOn ? barH : -barH);
+    if (dy) shiftAnnotations(dy);
     annotCanvas.width = segments[0].canvas.width;
     annotCanvas.height = segments[0].canvas.height;
     renderAnnots();
@@ -1114,6 +1513,15 @@ function toggleInfoBar() {
   reflectInfoBarBtn();
   updateDims();
   applyZoom();
+}
+// The two buttons are mutually exclusive by construction: topStyle holds exactly one value.
+function toggleInfoBar() {
+  if (doc) { toggleBarMenu(); return; }
+  setTopStyle(infoBar && topStyle === "bar" ? "off" : "bar");
+}
+function toggleWindowTop() {
+  if (doc) { toggleBarMenu(); return; }
+  setTopStyle(infoBar && topStyle === "window" ? "off" : "window");
 }
 
 /* ------------------------- Joined document (Join Pages) ------------------------- */
@@ -1155,7 +1563,7 @@ function hostPart() {
     pid: hostPid, origin: "host", src: baseSeg0, w: baseSeg0.width, h: baseSeg0.height, dpr,
     meta: { title: meta && meta.title, url: meta && meta.url, env: meta && meta.env, mode: meta && meta.mode },
     stampTime: stampTime || captureTime, barOn: !stampLocked && infoBar && !isPictureDoc(), barBaked: stampLocked, wasCropped,
-    legacy: { meta, infoBar, stampLocked, wasCropped, captureTime, stampTime, truncated, sectionCount }
+    legacy: { meta, infoBar, topStyle, stampLocked, wasCropped, captureTime, stampTime, truncated, sectionCount }
   };
 }
 
@@ -1174,9 +1582,14 @@ function layoutParts(d, env) {
   const G = n > 1 ? Math.round(JOIN_GUTTER_CSS * hd) : 0;
   const S = Math.round(JOIN_STRIP_CSS * hd);
   const live = (p) => p.barOn && !p.barBaked;
-  // ONE bar height for the whole document, at the host's scale, so the bars form one row.
-  const docBarH = barHeightFor(parts.some((p) => live(p) && pageHasEnv(p)), hd);
+  // ONE bar height for the whole document, at the host's scale, so the bars form one row. The
+  // window style also depends on WIDTH, so the narrowest live page decides for everyone - the
+  // pre-pass width below is byte-identical to mk()'s cw.
   const minDpr = Math.min(...parts.map((p) => p.dpr || 1));
+  const scaleOf = (p) => (d.matchText ? minDpr / (p.dpr || 1) : 1);
+  const liveW = parts.filter(live).map((p) => Math.round(p.w * scaleOf(p)));
+  const docBarH = topHeightFor(d.topStyle || "bar", parts.some((p) => live(p) && pageHasEnv(p)), hd,
+                               liveW.length ? Math.min(...liveW) : 0);
   const cuts = d.cuts || {}, floor = env.markFloor || {};
   const mk = (p, i, scale) => {
     const barH = live(p) ? docBarH : 0;
@@ -1358,7 +1771,7 @@ async function composeCanvas(d, L) {
   const links = [];
   for (const r of L.rects) {
     const p = d.parts[r.i];
-    if (r.barH) { const lk = drawInfoBar(ctx, r.cw, r.barH, p, d.dpr, r.x, r.y); if (lk && lk.uri) links.push(lk); }
+    if (r.barH) { const lk = drawTop(ctx, r.cw, r.barH, p, d.dpr, r.x, r.y, d.topStyle || "bar"); if (lk && lk.uri) links.push(lk); }
     const dec = await decodePart(p);
     try {
       if (r.cut || r.scale !== 1) {
@@ -1424,8 +1837,9 @@ async function collapseToSingle(p, opts) {
   const g = p.legacy || { meta: Object.assign({ mode: "visible", dpr: p.dpr }, p.meta), infoBar: p.barOn, stampLocked: p.barBaked,
                           wasCropped: false, captureTime: null, stampTime: p.stampTime, truncated: false, sectionCount: 0 };
   const old = segments[0].canvas;
+  const keepTop = g.topStyle || (doc && doc.topStyle) || "bar";     // read before doc is cleared
   doc = null; docLayout = null; docLinks = [];
-  meta = g.meta; dpr = p.dpr || 1; infoBar = g.infoBar; stampLocked = g.stampLocked; wasCropped = g.wasCropped;
+  meta = g.meta; dpr = p.dpr || 1; infoBar = g.infoBar; topStyle = keepTop; stampLocked = g.stampLocked; wasCropped = g.wasCropped;
   captureTime = g.captureTime; stampTime = g.stampTime; truncated = g.truncated; sectionCount = g.sectionCount;
   baseSeg0 = canvas; hostPid = p.pid;
   if (stampLocked) { infoBarLink = null; swapSeg0(canvas); } else applyInfoBar();
@@ -1575,7 +1989,8 @@ async function joinPages(incoming, opts) {
   const floor = markFloorFor(annotations, pageRects());
   for (const a of added) Object.assign(floor, markFloorFor(a.marks, [{ pid: a.part.pid, x: 0, y: 0, w: a.part.w, h: a.part.h, scale: 1 }]));
   const make = (d, cuts) => ({ kind: "joined", dpr, dir: d, matchHeights: doc ? doc.matchHeights : null,
-    matchText: doc ? doc.matchText : false, cuts: cuts || null, floor, parts: lab.parts,
+    matchText: doc ? doc.matchText : false, topStyle: (doc ? doc.topStyle : topStyle) || "bar",
+    cuts: cuts || null, floor, parts: lab.parts,
     hostPid: host.pid, meta: joinedMeta(lab.title, host) });
   let next = make(dir);
   let L = layoutParts(next, { hostDpr: dpr, markFloor: floor });
@@ -1603,11 +2018,13 @@ async function singleStateFromPart(p) {
   if (p.legacy) {
     const g = p.legacy;
     return { kind: "single", base: p.src, infoBar: g.infoBar, stampLocked: g.stampLocked, wasCropped: g.wasCropped,
+             topStyle: g.topStyle || (doc && doc.topStyle) || "bar",
              meta: g.meta, dpr: p.dpr || 1, hostPid: p.pid, stampTime: g.stampTime, captureTime: g.captureTime,
              truncated: g.truncated, sectionCount: g.sectionCount };
   }
   const canvas = (typeof Blob !== "undefined" && p.src instanceof Blob) ? await blobToCanvas(p.src) : p.src;
   return { kind: "single", base: canvas, infoBar: !!p.barOn, stampLocked: !!p.barBaked, wasCropped: !!p.wasCropped,
+           topStyle: (doc && doc.topStyle) || "bar",
            meta: Object.assign({ mode: "visible", dpr: p.dpr || 1 }, p.meta || {}), dpr: p.dpr || 1, hostPid: p.pid,
            stampTime: p.stampTime || null, captureTime: null, truncated: false, sectionCount: 1 };
 }
@@ -1806,6 +2223,13 @@ function wireTools() {
     }
   } catch (_) {}
   el("infobar").addEventListener("click", toggleInfoBar);
+  const wtb = el("windowtop"); if (wtb) wtb.addEventListener("click", toggleWindowTop);
+  try {
+    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+      if (composing || docBusy || stampLocked || doc) return;
+      if (infoBar && topStyle === "window") applyInfoBar();
+    });
+  } catch (_) {}
   el("crop").addEventListener("click", startCrop);
   wireJoinUI();
   el("cropApply").addEventListener("click", applyCrop);
@@ -2647,7 +3071,7 @@ function pageRects() {
 function snapAnnots() { const s = cloneAnnots(annotations); s.rects = pageRects(); return s; }
 function captureDoc() {
   if (doc) return doc;          // immutable: a change always builds a new document object
-  return { kind: "single", base: baseSeg0, infoBar, stampLocked, wasCropped, meta, dpr, hostPid, stampTime,
+  return { kind: "single", base: baseSeg0, infoBar, topStyle, stampLocked, wasCropped, meta, dpr, hostPid, stampTime,
            captureTime, truncated, sectionCount };
 }
 function snapDoc(label) {
@@ -3314,7 +3738,7 @@ function applySingleDoc(d) {
   if ("captureTime" in d) captureTime = d.captureTime;
   if ("truncated" in d) truncated = d.truncated;
   if ("sectionCount" in d) sectionCount = d.sectionCount;
-  baseSeg0 = d.base; infoBar = d.infoBar; stampLocked = d.stampLocked; wasCropped = d.wasCropped;
+  baseSeg0 = d.base; infoBar = d.infoBar; topStyle = d.topStyle || "bar"; stampLocked = d.stampLocked; wasCropped = d.wasCropped;
   meta = d.meta; dpr = d.dpr; hostPid = d.hostPid;
   if (d.stampTime) stampTime = d.stampTime;
   const live = infoBar && !stampLocked;
@@ -3504,7 +3928,7 @@ function recentWriteJoined(id) {
   const snap = {
     now: Date.now(), hostPid: d.hostPid, title: meta && meta.title, w: c.width, h: c.height,
     thumb: makeThumb(c), annots: annotsForSave(), rects: pageRects(),
-    layout: { dir: d.dir, matchHeights: d.matchHeights, matchText: d.matchText, cuts: d.cuts, floor: d.floor,
+    layout: { dir: d.dir, matchHeights: d.matchHeights, matchText: d.matchText, topStyle: d.topStyle || "bar", cuts: d.cuts, floor: d.floor,
               dpr: d.dpr, order: d.parts.map((p) => p.pid) },
     pages: d.parts.map((p) => ({ pid: p.pid, title: p.meta && p.meta.title, url: p.meta && p.meta.url,
       env: p.meta && p.meta.env, dpr: p.dpr, w: p.w, h: p.h, stampTs: p.stampTime ? +new Date(p.stampTime) : null,
@@ -4005,7 +4429,7 @@ async function restoreJoinedRecent(rec, opts) {
     capKey: pg.capKey || null
   }));
   const hd = L.dpr || rec.dpr || 1;
-  const d = { kind: "joined", dpr: hd, dir: L.dir || "row", matchHeights: L.matchHeights == null ? null : L.matchHeights,
+  const d = { kind: "joined", dpr: hd, dir: L.dir || "row", topStyle: L.topStyle || "bar", matchHeights: L.matchHeights == null ? null : L.matchHeights,
               matchText: !!L.matchText, cuts: L.cuts || null, floor: L.floor || {}, parts, hostPid: rec.hostPid,
               meta: { mode: "joined", title: rec.title, url: rec.url, env: rec.env, dpr: hd } };
   // Reset to a blank editor with one placeholder canvas for the composite to replace.
@@ -4937,6 +5361,13 @@ function setLayout(dir) {
 }
 function setMatchHeights(on) { if (doc) return arrangeChange("Match heights", Object.assign({}, doc, { matchHeights: !!on }), on ? "Heights matched" : "Full pages"); }
 function setMatchText(on) { if (doc) return arrangeChange("Same text size", Object.assign({}, doc, { matchText: !!on }), on ? "Same text size" : "Original sizes"); }
+// One style for the whole joined picture: a navy bar standing next to a browser window in the
+// same row would look like a mistake.
+function setDocTop(style) {
+  if (!doc) return Promise.resolve();
+  return arrangeChange("Window frame", Object.assign({}, doc, { topStyle: style }),
+                       style === "window" ? "Browser window on each page" : "Plain URL bar");
+}
 function barPossible(p) { return !p.barBaked && !!(p.meta && p.meta.url); }
 function setPageBar(pid, on) {
   if (!doc) return;
@@ -5205,6 +5636,10 @@ function closeBarMenu() { const m = el("barMenu"); if (m) m.hidden = true; }
 function renderBarMenu() {
   const m = el("barMenu"); if (!m || !doc) return;
   const nodes = [h("div", { class: "dl-menu-head", text: "URL bar on each page" })];
+  nodes.push(h("label", { class: "bm-row" },
+    h("input", { type: "checkbox", checked: (doc.topStyle || "bar") === "window",
+                 onchange: (e) => setDocTop(e.target.checked ? "window" : "bar").then(renderBarMenu) }),
+    h("span", { class: "bm-name", text: "Browser window frame" })));
   for (const p of doc.parts) {
     const can = barPossible(p);
     nodes.push(h("label", { class: can ? "bm-row" : "bm-row off" },

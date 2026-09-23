@@ -556,7 +556,7 @@ body:has(#stage[hidden]) .arail { display: none; }
    toolbar wrapping at ordinary window widths. Both keep their title tooltip.
    Copy, Send to Drive and Download keep their labels: those are the three
    things a bug-report run actually ends with. */
-#print span, #infobar span { display: none; }
+#print span, #infobar span, #windowtop span { display: none; }
 
 /* In the panel these are cells, not toolbar ghosts - Clear especially, which
    removes every annotation and does not ask first. */

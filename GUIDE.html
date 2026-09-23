@@ -202,6 +202,23 @@
     </div>
   </div>
 
+  <h2><span class="em">🪟</span> URL bar-এর বদলে browser window <span class="tag">NEW</span></h2>
+  <p class="hint">Screenshot-টা দেখে যেন বোঝা যায় এটা browser-এ তোলা — tab-এ পাতার নাম, address bar-এ ঠিকানা, ঠিক Windows-এর Chrome-এর মতো।</p>
+  <div class="card pad">
+    <p>Toolbar-এ <b>URL bar</b> button-এর পাশেই নতুন <b>Window</b> button। চাপলে ছবির উপরে সরু bar-এর বদলে একটা <b>Chrome window-এর উপরের অংশ</b> আঁকা হয় — tab (পাতার নাম সহ), back/forward/reload, address bar (তালা বা “Not secure” সহ), আর নিচে capture-এর সময় ও environment line।</p>
+    <table>
+      <tr><td class="k">দুটো একসাথে?</td><td class="v">না — একটা চালু করলে অন্যটা বন্ধ। দুই জায়গায় একই URL দেখানোর মানে নেই।</td></tr>
+      <tr><td class="k">ঠিকানার রং</td><td class="v">Chrome যেভাবে দেখায় ঠিক সেভাবে: <b>মূল domain উজ্জ্বল</b>, subdomain/path/query ধূসর। <code>http://</code> হলে তালার বদলে “Not secure” — bug report-এ এটা প্রমাণ থাকে।</td></tr>
+      <tr><td class="k">ছোট capture</td><td class="v">৬০০px-এর নিচে tab সারিটা বাদ যায় (শুধু address bar), আর <b>৩২০px-এর নিচে</b> পুরনো সরু bar-ই বসে — ছোট Area capture-এ window আঁকার মানে হয় না। Button-টা আগেই tooltip-এ বলে দেয়।</td></tr>
+      <tr><td class="k">জোড়া ছবিতে</td><td class="v">পুরো ছবির জন্য এক চেহারা — URL bar menu-র উপরে <b>Browser window frame</b> tick। সবচেয়ে সরু পাতাটাই ঠিক করে সবাই কোন চেহারা পাবে, যাতে এক সারিতে এক পাতায় window আর আরেক পাতায় bar না হয়।</td></tr>
+      <tr><td class="k">Dark / light</td><td class="v">আপনার Windows-এর theme অনুযায়ী আঁকে, আর stamp-এর সময়েই ছবিতে বসে যায়।</td></tr>
+      <tr><td class="k">Default</td><td class="v">বন্ধ — bug sheet-এ সরু bar-ই কাজের (window ~১১৪px জায়গা নেয়)। সবসময় চাইলে <b>Settings → Draw a browser window instead of the plain bar</b>।</td></tr>
+    </table>
+    <div class="callout">
+      কয়েকটা জিনিস ইচ্ছে করেই নকল করা হয়নি: <b>favicon</b> আসল নয় (আসল icon আনতে হলে বাড়তি permission লাগে আর canvas “tainted” হয়ে export ভেঙে যায়) — একটা নিরপেক্ষ globe বসে; window-এর কোণা গোল নয় (গোল কোণা মানে স্বচ্ছতা, JPG/PDF-এ কালো হয়ে যেত); আর PC-থেকে খোলা ছবিতে button নিষ্ক্রিয়, কারণ তার কোনো ঠিকানা নেই।
+    </div>
+  </div>
+
   <h2><span class="em">☁️</span> Send to Google Drive <span class="tag">MAIN</span></h2>
   <p class="hint">Editor-এর উপরের toolbar-এ <b>“Send to Drive”</b> button — image upload হয়ে shareable <b>link অটো clipboard-এ copy</b> হয়ে যায়।</p>
   <div class="card pad">
