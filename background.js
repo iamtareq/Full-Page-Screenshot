@@ -24,6 +24,19 @@ const CANNOT_SCRIPT_RE = /showing error page|cannot be scripted|Cannot access co
 const cannotScript = (e) => CANNOT_SCRIPT_RE.test((e && e.message) || String(e || ""));
 const ERROR_PAGE_NOTE = "This is one of Chrome's own error pages, where no extension may run: only what was on screen could be captured.";
 
+// A page can also freeze ITSELF. While a modal dialog raised by the page - alert(), confirm(),
+// prompt(), or a beforeunload box - is open, that tab's renderer sits in a nested message loop:
+// chrome.scripting never answers. Not an error, not a result, just silence, so the capture used
+// to wait forever on a spinner. Every injected call now has a deadline; past it we assume the
+// page is blocked, keep whatever the browser itself can still give us, and say why.
+// (Seen in the wild: a DataTables grid whose rows are missing a column raises an alert on every
+// draw, and the whole tab is stuck until someone clicks OK.)
+let EXEC_TIMEOUT_MS = 6000;          // a healthy page answers an injected function in milliseconds
+const PAGE_BLOCKED = "FPC_PAGE_BLOCKED";
+const isBlocked = (e) => !!e && e.message === PAGE_BLOCKED;
+const DIALOG_NOTE = "The page never answered, so it could not be measured - this is only what was on screen. A dialog from the page itself (an alert box) is the usual reason: click OK on it and capture again for the whole page.";
+const DIALOG_MSG = "The page is not answering. A dialog raised by the page (an alert box) is the usual reason: while one is open Chrome freezes the page, so no extension can measure it or draw a selection on it. Click OK on the dialog and try again - or capture the visible area, which does not need the page to run.";
+
 // Job store: jobId -> { meta, tiles } | { error }
 const jobs = new Map();
 // Job ids name an editor tab (?job=<id>) and must never repeat: an MV3 worker is killed
@@ -272,6 +285,9 @@ async function fpcPreScroll() {
   de.style.scrollBehavior = prevSB || "";
   return true;
 }
+
+// The smallest question there is: a page that cannot answer this is not running at all.
+function fpcPing() { return 1; }
 
 function fpcVisibleMeta() {
   let loadMs = 0;
@@ -875,10 +891,17 @@ async function runCapture(tab, mode, delay) {
   if (capturingTabs.has(tab.id)) return;
   capturingTabs.add(tab.id);
 
-  const exec = (func, args) =>
-    chrome.scripting
+  const exec = (func, args, timeout) => {
+    const p = chrome.scripting
       .executeScript({ target: { tabId: tab.id }, func, args: args || [] })
       .then((res) => (res && res[0] ? res[0].result : undefined));
+    const ms = timeout === 0 ? 0 : (timeout || EXEC_TIMEOUT_MS);
+    if (!ms) return p;                     // waiting for the user: no deadline makes sense
+    return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(PAGE_BLOCKED)), ms))]);
+  };
+  // Before anything the user has to interact with, check the page can still run code at all -
+  // otherwise they would be told to drag out an area on a page that cannot draw the overlay.
+  const requireLivePage = () => exec(fpcPing, [], 3000);
 
   const settings = await getSettings();
   const windowId = tab.windowId;
@@ -896,20 +919,22 @@ async function runCapture(tab, mode, delay) {
       const dataUrl = await captureVisible(windowId);
       // The pixels come from the browser, the page details from a script inside the page. On
       // Chrome's own error pages the second half is refused - keep the screenshot anyway.
-      let m = null;
-      try { m = await exec(fpcVisibleMeta); } catch (e) { if (!cannotScript(e)) throw e; }
+      let m = null, why = ERROR_PAGE_NOTE;
+      try { m = await exec(fpcVisibleMeta); }
+      catch (e) { if (isBlocked(e)) why = DIALOG_NOTE; else if (!cannotScript(e)) throw e; }
       m = m || { clientW: 0, clientH: 0, dpr: null };
       setBadge("");
       return openResult(jobId, {
         meta: { mode: "visible", title: tab.title || "screenshot", url: tab.url, incognito: !!tab.incognito, dpr: m.dpr,
-          note: m.dpr ? undefined : ERROR_PAGE_NOTE,
+          note: m.dpr ? undefined : why,
           env: m.ua ? { ua: m.ua, vw: m.vw, vh: m.vh, dpr: m.dpr, loadMs: m.loadMs } : undefined },
         tiles: [{ dataUrl, x: 0, y: 0 }]
       });
     }
 
     if (mode === "region") {
-      const sel = await exec(fpcSelectRegion);   // {x,y,w,h,dpr} PAGE coords, or null if cancelled
+      await requireLivePage();
+      const sel = await exec(fpcSelectRegion, [], 0);   // {x,y,w,h,dpr} PAGE coords, or null if cancelled
       if (!sel) { setBadge(""); return; }        // user pressed Esc / no selection — no result tab
       // captureVisibleTab grabs the window's active tab; make sure it's still ours.
       const [act] = await chrome.tabs.query({ active: true, windowId });
@@ -921,7 +946,8 @@ async function runCapture(tab, mode, delay) {
     }
 
     if (mode === "element") {
-      const sel = await exec(fpcSelectElement);  // element rect {x,y,w,h,dpr,fixed}, or null
+      await requireLivePage();
+      const sel = await exec(fpcSelectElement, [], 0);  // element rect {x,y,w,h,dpr,fixed}, or null
       if (!sel) { setBadge(""); return; }
       const [act] = await chrome.tabs.query({ active: true, windowId });
       if (!act || act.id !== tab.id) { setBadge(""); return; }
@@ -953,7 +979,8 @@ async function runCapture(tab, mode, delay) {
     // the box. That makes it work where auto-detection bows out: grids whose page also
     // scrolls a little, or that sit just under the dominance threshold.
     if (mode === "scroller") {
-      const pick = await exec(fpcSelectScroller);   // stashes the element on window.__fpcPicked
+      await requireLivePage();
+      const pick = await exec(fpcSelectScroller, [], 0);   // stashes the element on window.__fpcPicked
       if (!pick) { setBadge(""); return; }
       const [act2] = await chrome.tabs.query({ active: true, windowId });
       if (!act2 || act2.id !== tab.id) { setBadge(""); return; }
@@ -971,7 +998,7 @@ async function runCapture(tab, mode, delay) {
 
     // ---- full page ----
     if (settings.preScroll) {
-      try { await exec(fpcPreScroll); } catch (_) {}
+      try { await exec(fpcPreScroll, [], 120000); } catch (_) {}
     }
     // If the window itself doesn't scroll but the content lives in an inner
     // overflow:auto container (SPA / ERP dashboard / data table), capture that
@@ -991,11 +1018,28 @@ async function runCapture(tab, mode, delay) {
     return await tiledCapture({ exec, windowId, tab, jobId, settings, metrics, region, mode: "full" });
   } catch (e) {
     setBadge("");
-    try { await exec(fpcRestore); } catch (_) {}
+    try { await exec(fpcRestore, [], 1500); } catch (_) {}
     // A page no extension may script: Chrome's own error pages (404 with no body, DNS or
     // connection failures). Nothing can be measured, scrolled or drawn on, so a full page and
     // an area selection are both out - but the screen itself can still be copied, and an error
     // page is exactly what a tester wants to put in a bug report. It is one screen tall anyway.
+    // The page is frozen by its own dialog. Full page and Visible area can still keep the screen:
+    // captureVisibleTab is the browser's own copy and does not need the page to run. An area or an
+    // element must be pointed AT, and nothing can be pointed at on a frozen page.
+    if (isBlocked(e)) {
+      if (mode === "full" || mode === "visible") {
+        try {
+          const dataUrl = await captureVisible(windowId);
+          setBadge("");
+          return openResult(jobId, {
+            meta: { mode: "visible", title: tab.title || "screenshot", url: tab.url, incognito: !!tab.incognito,
+                    dpr: null, note: DIALOG_NOTE },
+            tiles: [{ dataUrl, x: 0, y: 0 }]
+          });
+        } catch (_) { /* the dialog blocks the copy too: fall through to the message */ }
+      }
+      return openResult(jobId, { error: DIALOG_MSG });
+    }
     if (cannotScript(e) && mode !== "region") {
       try {
         const dataUrl = await captureVisible(windowId);
