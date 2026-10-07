@@ -1,4 +1,4 @@
 {
-  "version": "1.5.1",
-  "notes": "Fix. A page that freezes itself - an alert box raised by the page, which Chrome keeps up until someone clicks OK - used to leave the capture waiting for ever. Every injected call now has a deadline: Full page and Visible area keep what was on screen and say why, Area and Capture element explain what to click, and a normal capture is untouched."
+  "version": "1.5.2",
+  "notes": "New. Turn the picture: two buttons beside Crop turn it 90 degrees left or right - for a screenshot or a photo that arrived on its side. It works the way Crop does: the marks and the URL bar become part of the picture and turn with it, and one Ctrl+Z puts everything back. New marks can be drawn on the turned picture as usual."
 }

@@ -38,6 +38,7 @@ let aborted = false;         // set once an unrecoverable error is shown
 let truncated = false;       // page was wider than the canvas limit
 let sectionCount = 0;        // scroll passes this capture was stitched from
 let wasCropped = false;      // the image on screen is a crop of the capture
+let wasRotated = false;      // ...or has been turned 90 degrees since it was captured
 let scrollbarLeft = false;   // vertical scrollbar rendered on the left (RTL)
 let infoBar = true;          // stamp a URL + capture-time bar on top of the image
 let topStyle = "bar";        // which top: the slim "bar", or a "window" (browser chrome)
@@ -551,7 +552,7 @@ async function openPictureBase(p) {
   dpr = 1;
   captureTime = null;                       // not a restored capture: saveRecent keeps it like a fresh one
   stampTime = new Date();
-  baseSeg0 = canvas; stampLocked = false; infoBarLink = null; aborted = false; wasCropped = false;
+  baseSeg0 = canvas; stampLocked = false; infoBarLink = null; aborted = false; wasCropped = false; wasRotated = false;
   progressWrap.hidden = true; errorWrap.hidden = true; stage.hidden = false; tools.hidden = false;
   const cb = el("crop"); if (cb) cb.disabled = false;
   reflectInfoBarBtn(); updateDims(); applyZoom();
@@ -864,6 +865,7 @@ function finalize() {
 }
 
 function updateDims() {
+  reflectRotateBtns();
   const w = segments[0] ? segments[0].canvas.width : fullWpx;
   const h = segments.reduce((a, s) => a + s.canvas.height, 0);
   // The identity strip says WHAT you are looking at; the status bar says
@@ -926,6 +928,7 @@ function reflectStatus(w, h) {
     if (sectionCount > 1) bits.push(sectionCount + " sections");
     if (segments.length > 1) bits.push(segments.length + " parts");
     if (wasCropped) bits.push("cropped");
+    if (wasRotated) bits.push("rotated");
     if (truncated) bits.push("width truncated");
     p.textContent = doc ? statusPartsFor() : (bits.length ? bits.join(" · ") : "1 section");
   }
@@ -2231,6 +2234,8 @@ function wireTools() {
     });
   } catch (_) {}
   el("crop").addEventListener("click", startCrop);
+  const rl = el("rotl"); if (rl) rl.addEventListener("click", () => rotateImage(-1));
+  const rr = el("rotr"); if (rr) rr.addEventListener("click", () => rotateImage(1));
   wireJoinUI();
   el("cropApply").addEventListener("click", applyCrop);
   el("cropCancel").addEventListener("click", () => { endCrop(); maybeAnnot(); });
@@ -2611,6 +2616,64 @@ function applyCrop() {
   applyZoom();
   maybeAnnot();
   toast("Cropped \u00b7 Ctrl+Z undoes it");
+}
+
+// Turning the picture is the same move as a crop: what is on screen - marks, the URL bar or the
+// window top, a joined row - becomes the new picture's pixels, in one undoable step. Keeping the
+// marks live instead would mean re-mapping every shape (both ends of an arrow, a text box's
+// corner, a step badge), which is the "full" version of this feature and not what was asked for.
+function rotateImage(dir) {
+  if (docBusy || cropping) return;
+  if (segments.length !== 1 || !segments[0]) { toast("A multi-part image can't be rotated"); return; }
+  const src = flatten(segments[0]);                 // annotations baked in, same pixel size
+  const w = src.width, h = src.height;
+  if (h > MAX_SIDE || w > MAX_SIDE) { toast("This picture is too large to turn."); return; }
+
+  const out = document.createElement("canvas");
+  out.width = h; out.height = w;                    // a quarter turn swaps the sides
+  const ctx = out.getContext("2d");
+  if (dir > 0) { ctx.translate(out.width, 0); ctx.rotate(Math.PI / 2); }   // clockwise
+  else { ctx.translate(0, out.height); ctx.rotate(-Math.PI / 2); }         // anticlockwise
+  ctx.drawImage(src, 0, 0);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+  // One Ctrl+Z brings the picture back, with its live marks and its Recent row.
+  pushDocHistory("Rotate");
+  segments[0].canvas.remove();
+  if (doc) { doc = null; docLayout = null; docLinks = []; }   // the pages are one picture now
+  if (annotCanvas) { annotCanvas.remove(); annotCanvas = null; annotCtx = null; }
+  // Write the markup out against the picture it was drawn on, then let the row go: from here
+  // what is on screen no longer matches the stored blob.
+  flushRecentSave();
+  currentRecentId = null;
+  if (annotations.length) bakedMarks = true;
+  annotations = [];
+  markEdited();
+  canvasHost.insertBefore(out, cropOverlay);
+  segments = [{ canvas: out, ctx, startY: 0, height: out.height }];
+  fullWpx = out.width; fullHpx = out.height;
+  baseSeg0 = out;
+  stampLocked = true;                      // whatever top was showing is now part of the pixels
+  hostPid = "p" + Date.now().toString(36) + "r";   // a different picture: a new page identity
+  infoBarLink = null;                      // the URL is no longer where the PDF link said it was
+  wasRotated = true;
+  reflectInfoBarBtn();
+  updateDims();
+  applyZoom();
+  maybeAnnot();
+  toast((dir > 0 ? "Turned right" : "Turned left") + " \u00b7 Ctrl+Z undoes it");
+}
+// Rotation needs one whole canvas to turn, exactly like Crop.
+function reflectRotateBtns() {
+  const on = segments.length === 1 && !!segments[0] && !cropping;
+  for (const id of ["rotl", "rotr"]) {
+    const b = el(id);
+    if (!b) continue;
+    b.disabled = !on;
+    b.title = on
+      ? (id === "rotl" ? "Turn 90\u00b0 left" : "Turn 90\u00b0 right")
+      : "A multi-part image can't be turned";
+  }
 }
 
 /* ------------------------- Annotation ------------------------- */
@@ -3071,7 +3134,7 @@ function pageRects() {
 function snapAnnots() { const s = cloneAnnots(annotations); s.rects = pageRects(); return s; }
 function captureDoc() {
   if (doc) return doc;          // immutable: a change always builds a new document object
-  return { kind: "single", base: baseSeg0, infoBar, topStyle, stampLocked, wasCropped, meta, dpr, hostPid, stampTime,
+  return { kind: "single", base: baseSeg0, infoBar, topStyle, stampLocked, wasCropped, wasRotated, meta, dpr, hostPid, stampTime,
            captureTime, truncated, sectionCount };
 }
 function snapDoc(label) {
@@ -3739,6 +3802,7 @@ function applySingleDoc(d) {
   if ("truncated" in d) truncated = d.truncated;
   if ("sectionCount" in d) sectionCount = d.sectionCount;
   baseSeg0 = d.base; infoBar = d.infoBar; topStyle = d.topStyle || "bar"; stampLocked = d.stampLocked; wasCropped = d.wasCropped;
+  wasRotated = !!d.wasRotated;
   meta = d.meta; dpr = d.dpr; hostPid = d.hostPid;
   if (d.stampTime) stampTime = d.stampTime;
   const live = infoBar && !stampLocked;
