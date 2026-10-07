@@ -2643,6 +2643,10 @@ function rotateImage(dir) {
   pushDocHistory("Rotate");
   segments[0].canvas.remove();
   if (doc) { doc = null; docLayout = null; docLinks = []; }   // the pages are one picture now
+  // Leave annotate mode before the layer goes: maybeAnnot() below only re-arms when the editor
+  // is NOT already in it, so skipping this leaves the turned picture with no layer to draw on.
+  // (Crop gets this for free - startCrop() exits annotate mode on the way in.)
+  if (annotating) exitAnnot();
   if (annotCanvas) { annotCanvas.remove(); annotCanvas = null; annotCtx = null; }
   // Write the markup out against the picture it was drawn on, then let the row go: from here
   // what is on screen no longer matches the stored blob.
