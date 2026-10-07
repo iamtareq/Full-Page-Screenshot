@@ -1452,7 +1452,8 @@ function reflectBarBtn() {
   btn.title = segments.length !== 1
     ? "URL/time bar can't be toggled on a multi-part image"
     : stampLocked
-      ? "URL/time bar is locked after cropping"
+      ? (wasRotated && !wasCropped ? "URL/time bar is part of the picture once it is turned"
+                                   : "URL/time bar is locked after cropping")
       : (infoBar && topStyle === "bar" ? "URL + time bar is ON — click to remove" : "Add a bar with the page URL and capture time");
 }
 // The window button mirrors it: same gates, the other style. Narrow captures say so before the
@@ -1477,7 +1478,8 @@ function reflectWindowBtn() {
   btn.title = segments.length !== 1
     ? "A browser window can't be drawn on a multi-part image"
     : stampLocked
-      ? "The top is locked after cropping"
+      ? (wasRotated && !wasCropped ? "The top is part of the picture once it is turned"
+                                   : "The top is locked after cropping")
       : topWidth() && topWidth() < Math.round(WT.minW * dpr)
         ? "Too narrow for a browser window — the plain URL bar is used"
         : (on ? "Browser window is ON — click to remove" : "Draw a browser window top (tab + address bar) into the picture");
