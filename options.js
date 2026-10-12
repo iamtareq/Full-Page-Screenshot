@@ -13,7 +13,8 @@ const DEFAULTS = {
   filenameTemplate: "{title}-{date}",
   driveClientId: "",
   driveFolderId: "",
-  driveShareAnyone: false
+  driveShareAnyone: false,
+  driveLinkLabel: false
 };
 
 const els = {
@@ -32,6 +33,7 @@ const els = {
   driveClientId: document.getElementById("driveClientId"),
   driveFolderId: document.getElementById("driveFolderId"),
   driveShareAnyone: document.getElementById("driveShareAnyone"),
+  driveLinkLabel: document.getElementById("driveLinkLabel"),
   qval: document.getElementById("qval"),
   dval: document.getElementById("dval"),
   status: document.getElementById("status")
@@ -103,6 +105,7 @@ async function load() {
   els.driveClientId.value = cfg.driveClientId || "";
   els.driveFolderId.value = cfg.driveFolderId || "";
   els.driveShareAnyone.checked = !!cfg.driveShareAnyone;
+  if (els.driveLinkLabel) els.driveLinkLabel.checked = !!cfg.driveLinkLabel;
   try {
     const ru = document.getElementById("redirectUri");
     if (ru && chrome.identity && chrome.identity.getRedirectURL) ru.textContent = chrome.identity.getRedirectURL();
@@ -130,7 +133,8 @@ async function save() {
     filenameTemplate: els.filenameTemplate.value.trim() || DEFAULTS.filenameTemplate,
     driveClientId: els.driveClientId.value.trim(),
     driveFolderId: els.driveFolderId.value.trim(),
-    driveShareAnyone: els.driveShareAnyone.checked
+    driveShareAnyone: els.driveShareAnyone.checked,
+    driveLinkLabel: !!(els.driveLinkLabel && els.driveLinkLabel.checked)
   };
   // Turning the feature off should not leave captures sitting in storage.
   if (!settings.recentEnabled) {

@@ -4213,7 +4213,8 @@ async function getDriveSettings() {
     // Per-user Settings win; otherwise fall back to the shared team config.
     clientId: ((cfg.driveClientId || "").trim()) || ((team.clientId || "").trim()),
     folderId: parseFolderId(cfg.driveFolderId || team.folderId || ""),
-    shareAnyone: !!cfg.driveShareAnyone
+    shareAnyone: !!cfg.driveShareAnyone,
+    linkLabel: cfg.driveLinkLabel === true ? (String(cfg.driveLinkLabelText || "").trim() || DRIVE_LABEL) : ""
   };
 }
 
@@ -4319,6 +4320,28 @@ function notifyDrive(title, message) {
   } catch (_) {}
 }
 
+const DRIVE_LABEL = "Click Me";
+const escHtml = (t) => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+// Put the link on the clipboard. With a label set, it goes on TWICE: the plain URL as always,
+// and an HTML anchor beside it - so a paste into Google Sheets, Excel or Docs lands as one
+// clickable word ("Click Me") the way the team's checklists are written, while a paste into a
+// plain box (Teams, Notepad, a terminal) still gets the URL. Without a label, nothing changes.
+async function putLinkOnClipboard(url, label) {
+  if (label && typeof ClipboardItem === "function" && navigator.clipboard && navigator.clipboard.write) {
+    const html = '<a href="' + escHtml(url) + '">' + escHtml(label) + "</a>";
+    try {
+      await navigator.clipboard.write([new ClipboardItem({
+        "text/plain": new Blob([url], { type: "text/plain" }),
+        "text/html": new Blob([html], { type: "text/html" })
+      })]);
+      return "label";
+    } catch (_) { /* no rich clipboard here: the plain URL below is still worth having */ }
+  }
+  await navigator.clipboard.writeText(url);
+  return "plain";
+}
+
 // Re-copy the last uploaded Drive link. Recovery for when the auto-copy on upload
 // failed (tab not focused) or the clipboard was later overwritten by a Copy / Ctrl+C
 // (which puts the image on the clipboard, replacing the link).
@@ -4327,8 +4350,9 @@ async function copyDriveLink() {
   const btn = el("copyLink");
   const label = btn && btn.querySelector("span");
   try {
-    await navigator.clipboard.writeText(lastDriveLink);
-    toast("Drive link copied");
+    const lab = (await getDriveSettings()).linkLabel;
+    const how = await putLinkOnClipboard(lastDriveLink, lab);
+    toast(how === "label" ? "Drive link copied \u00b7 pastes as \u201c" + lab + "\u201d in a sheet" : "Drive link copied");
     if (label) {
       const orig = label.textContent;
       label.textContent = "✓ Copied";
@@ -4345,7 +4369,7 @@ async function uploadToDrive() {
   const orig = label ? label.textContent : "";
   let ok = false;
   try {
-    const { folderId, shareAnyone } = await getDriveSettings();
+    const { folderId, shareAnyone, linkLabel } = await getDriveSettings();
     // Acquire the token first — surfaces NO_CLIENT / cancel before the expensive encode.
     // getDriveToken() refreshes silently when possible, so no repeated account picker.
     let token = await getDriveToken();
@@ -4384,7 +4408,7 @@ async function uploadToDrive() {
 
     const link = file.webViewLink || ("https://drive.google.com/file/d/" + file.id + "/view");
     let copied = false;
-    try { await navigator.clipboard.writeText(link); copied = true; } catch (_) {}
+    try { await putLinkOnClipboard(link, linkLabel); copied = true; } catch (_) {}
 
     const vis = shareAnyone ? (sharedPublic ? "public link" : "private — sharing failed") : "private";
     lastDriveLink = link;

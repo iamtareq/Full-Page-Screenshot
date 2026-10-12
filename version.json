@@ -1,4 +1,4 @@
 {
-  "version": "1.5.2",
-  "notes": "New. Turn the picture: two buttons beside Crop turn it 90 degrees left or right - for a screenshot or a photo that arrived on its side. It works the way Crop does: the marks and the URL bar become part of the picture and turn with it, and one Ctrl+Z puts everything back. New marks can be drawn on the turned picture as usual."
+  "version": "1.5.3",
+  "notes": "New, off by default. 'Paste the link as “Click Me” in a sheet' in Settings: with it on, a copied Drive link goes on the clipboard twice - the plain URL as always, and a one-word link beside it - so pasting into Google Sheets or Excel gives a clickable Click Me cell instead of a long URL, the way the team's checklists are written. Pasting into Teams, Notepad or any plain box is unchanged, and with the switch off nothing about the copy changes at all."
 }
