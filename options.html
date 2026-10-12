@@ -91,13 +91,15 @@
     .rdesc b { font-weight: 600; color: var(--text); }
     .ctrl { display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-height: 28px; }
 
-    select, input[type="text"] {
+    select, input[type="text"], input[type="number"] {
       width: 100%; height: 28px; padding: 0 9px;
       border: 1px solid var(--edge); border-radius: var(--r1);
       font: inherit; font-size: 13px; background: var(--surface); color: var(--text);
       transition: border-color .12s;
     }
-    select:hover, input[type="text"]:hover { border-color: var(--text); }
+    select:hover, input[type="text"]:hover, input[type="number"]:hover { border-color: var(--text); }
+    /* A point size is three characters wide; a full-width box would read as a text field. */
+    input[type="number"] { width: 84px; text-align: right; }
 
     /* The readout sits WITH the slider. It used to live in the opposite corner
        of the row, mid-sentence, in the page's faintest style. */
@@ -458,6 +460,29 @@
           <option value="left">Left</option>
           <option value="center">Center</option>
           <option value="right">Right</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label class="rlabel" for="driveLinkSize">&hellip; at this font size</label>
+        <div class="rdesc">Same reason: a paste that says nothing about the size gets the sheet&rsquo;s default (10&nbsp;pt in Google Sheets), even in a 12&nbsp;pt row. Put your row&rsquo;s size here, or leave it empty to say nothing about it.</div>
+      </div>
+      <div class="ctrl">
+        <input type="number" id="driveLinkSize" min="6" max="72" step="1" placeholder="pt" />
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label class="rlabel" for="driveLinkMode">Or paste it as a formula</label>
+        <div class="rdesc">The sure way to keep a cell exactly as it is: paste <code>=HYPERLINK(&hellip;)</code> instead of formatted text. A formula is plain typing, so the cell keeps its own size, font, colour and alignment &mdash; the two settings above stop mattering. The cost: a plain box (Teams, Notepad) gets the formula text instead of the URL, so turn it on only if the link is for sheets.</div>
+      </div>
+      <div class="ctrl">
+        <select id="driveLinkMode">
+          <option value="html">A link (keeps its look)</option>
+          <option value="formula">A formula (keeps the cell)</option>
         </select>
       </div>
     </div>

@@ -15,7 +15,9 @@ const DEFAULTS = {
   driveFolderId: "",
   driveShareAnyone: false,
   driveLinkLabel: false,
-  driveLinkAlign: "center"
+  driveLinkAlign: "center",
+  driveLinkSize: "",
+  driveLinkMode: "html"
 };
 
 const els = {
@@ -36,6 +38,8 @@ const els = {
   driveShareAnyone: document.getElementById("driveShareAnyone"),
   driveLinkLabel: document.getElementById("driveLinkLabel"),
   driveLinkAlign: document.getElementById("driveLinkAlign"),
+  driveLinkSize: document.getElementById("driveLinkSize"),
+  driveLinkMode: document.getElementById("driveLinkMode"),
   qval: document.getElementById("qval"),
   dval: document.getElementById("dval"),
   status: document.getElementById("status")
@@ -109,6 +113,8 @@ async function load() {
   els.driveShareAnyone.checked = !!cfg.driveShareAnyone;
   if (els.driveLinkLabel) els.driveLinkLabel.checked = !!cfg.driveLinkLabel;
   if (els.driveLinkAlign) els.driveLinkAlign.value = ["", "left", "center", "right"].indexOf(cfg.driveLinkAlign) >= 0 ? cfg.driveLinkAlign : "center";
+  if (els.driveLinkSize) els.driveLinkSize.value = cfg.driveLinkSize || "";
+  if (els.driveLinkMode) els.driveLinkMode.value = cfg.driveLinkMode === "formula" ? "formula" : "html";
   try {
     const ru = document.getElementById("redirectUri");
     if (ru && chrome.identity && chrome.identity.getRedirectURL) ru.textContent = chrome.identity.getRedirectURL();
@@ -138,7 +144,9 @@ async function save() {
     driveFolderId: els.driveFolderId.value.trim(),
     driveShareAnyone: els.driveShareAnyone.checked,
     driveLinkLabel: !!(els.driveLinkLabel && els.driveLinkLabel.checked),
-    driveLinkAlign: els.driveLinkAlign ? els.driveLinkAlign.value : "center"
+    driveLinkAlign: els.driveLinkAlign ? els.driveLinkAlign.value : "center",
+    driveLinkSize: els.driveLinkSize ? els.driveLinkSize.value.trim() : "",
+    driveLinkMode: els.driveLinkMode ? els.driveLinkMode.value : "html"
   };
   // Turning the feature off should not leave captures sitting in storage.
   if (!settings.recentEnabled) {
