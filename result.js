@@ -4214,7 +4214,11 @@ async function getDriveSettings() {
     clientId: ((cfg.driveClientId || "").trim()) || ((team.clientId || "").trim()),
     folderId: parseFolderId(cfg.driveFolderId || team.folderId || ""),
     shareAnyone: !!cfg.driveShareAnyone,
-    linkLabel: cfg.driveLinkLabel === true ? (String(cfg.driveLinkLabelText || "").trim() || DRIVE_LABEL) : ""
+    linkLabel: cfg.driveLinkLabel === true ? (String(cfg.driveLinkLabelText || "").trim() || DRIVE_LABEL) : "",
+    // Unset means this setting predates the choice: centre it, which is what the sheets the
+    // label was built for use. "" is only ever a deliberate pick of "as it comes".
+    linkAlign: cfg.driveLinkAlign === undefined ? "center"
+             : (DRIVE_ALIGNS.indexOf(cfg.driveLinkAlign) > 0 ? cfg.driveLinkAlign : "")
   };
 }
 
@@ -4321,15 +4325,32 @@ function notifyDrive(title, message) {
 }
 
 const DRIVE_LABEL = "Click Me";
+const DRIVE_ALIGNS = ["", "left", "center", "right"];   // "" = claim no alignment at all
 const escHtml = (t) => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
+// A sheet takes its formatting from the HTML that was pasted, not from the cell it lands in: a
+// bare anchor carries no alignment, so Sheets falls back to its own default and a centred column
+// comes out left. The anchor therefore travels inside a one-cell table that says, in the two ways
+// a sheet reads it (the align attribute and the CSS), where the text should sit.
+function linkHtml(url, label, align) {
+  const a = '<a href="' + escHtml(url) + '">' + escHtml(label) + "</a>";
+  if (!align) return a;                      // "as it comes": no table, no formatting claimed
+  const al = escHtml(align);
+  // Both axes, and both dialects. Google's own HTML for a sheet writes the cell as
+  // <td class="..."> with text-align AND vertical-align in the class, and a paste that names
+  // only one of them leaves the other at the importer's default - which is how a pasted link
+  // ends up left AND sitting on the bottom of a row that was centred and middled.
+  return '<table><tr><td align="' + al + '" valign="middle" style="text-align:' + al +
+         ';vertical-align:middle">' + a + "</td></tr></table>";
+}
+
 // Put the link on the clipboard. With a label set, it goes on TWICE: the plain URL as always,
-// and an HTML anchor beside it - so a paste into Google Sheets, Excel or Docs lands as one
-// clickable word ("Click Me") the way the team's checklists are written, while a paste into a
-// plain box (Teams, Notepad, a terminal) still gets the URL. Without a label, nothing changes.
-async function putLinkOnClipboard(url, label) {
+// and the HTML beside it - so a paste into Google Sheets, Excel or Docs lands as one clickable
+// word ("Click Me") the way the team's checklists are written, while a paste into a plain box
+// (Teams, Notepad, a terminal) still gets the URL. Without a label, nothing changes.
+async function putLinkOnClipboard(url, label, align) {
   if (label && typeof ClipboardItem === "function" && navigator.clipboard && navigator.clipboard.write) {
-    const html = '<a href="' + escHtml(url) + '">' + escHtml(label) + "</a>";
+    const html = linkHtml(url, label, align);
     try {
       await navigator.clipboard.write([new ClipboardItem({
         "text/plain": new Blob([url], { type: "text/plain" }),
@@ -4350,8 +4371,9 @@ async function copyDriveLink() {
   const btn = el("copyLink");
   const label = btn && btn.querySelector("span");
   try {
-    const lab = (await getDriveSettings()).linkLabel;
-    const how = await putLinkOnClipboard(lastDriveLink, lab);
+    const cfg = await getDriveSettings();
+    const lab = cfg.linkLabel;
+    const how = await putLinkOnClipboard(lastDriveLink, lab, cfg.linkAlign);
     toast(how === "label" ? "Drive link copied \u00b7 pastes as \u201c" + lab + "\u201d in a sheet" : "Drive link copied");
     if (label) {
       const orig = label.textContent;
@@ -4369,7 +4391,7 @@ async function uploadToDrive() {
   const orig = label ? label.textContent : "";
   let ok = false;
   try {
-    const { folderId, shareAnyone, linkLabel } = await getDriveSettings();
+    const { folderId, shareAnyone, linkLabel, linkAlign } = await getDriveSettings();
     // Acquire the token first — surfaces NO_CLIENT / cancel before the expensive encode.
     // getDriveToken() refreshes silently when possible, so no repeated account picker.
     let token = await getDriveToken();
@@ -4408,7 +4430,7 @@ async function uploadToDrive() {
 
     const link = file.webViewLink || ("https://drive.google.com/file/d/" + file.id + "/view");
     let copied = false;
-    try { await putLinkOnClipboard(link, linkLabel); copied = true; } catch (_) {}
+    try { await putLinkOnClipboard(link, linkLabel, linkAlign); copied = true; } catch (_) {}
 
     const vis = shareAnyone ? (sharedPublic ? "public link" : "private — sharing failed") : "private";
     lastDriveLink = link;

@@ -446,6 +446,21 @@
         <span class="switch"><input type="checkbox" id="driveLinkLabel" /><span class="slider"></span></span>
       </div>
     </div>
+
+    <div class="row">
+      <div>
+        <label class="rlabel" for="driveLinkAlign">&hellip; sitting in the cell</label>
+        <div class="rdesc">A sheet takes its formatting from what was pasted, so a pasted link can flatten a centred column to the left. Pick what the cell should say: <b>Center</b> keeps a centred column centred. <b>As it comes</b> claims no alignment at all &mdash; that is the old behaviour, where the sheet decides (usually left).</div>
+      </div>
+      <div class="ctrl">
+        <select id="driveLinkAlign">
+          <option value="">As it comes</option>
+          <option value="left">Left</option>
+          <option value="center">Center</option>
+          <option value="right">Right</option>
+        </select>
+      </div>
+    </div>
   </div>
 </div>
 

@@ -1,4 +1,4 @@
 {
-  "version": "1.5.3",
-  "notes": "New, off by default. 'Paste the link as “Click Me” in a sheet' in Settings: with it on, a copied Drive link goes on the clipboard twice - the plain URL as always, and a one-word link beside it - so pasting into Google Sheets or Excel gives a clickable Click Me cell instead of a long URL, the way the team's checklists are written. Pasting into Teams, Notepad or any plain box is unchanged, and with the switch off nothing about the copy changes at all."
+  "version": "1.5.4",
+  "notes": "Fix. A pasted “Click Me” link no longer flattens the cell: a sheet formats a pasted cell from the HTML it was given, so a link that claimed no alignment landed left and on the bottom of a row that was centred and middled. The paste now says where the text sits - Center by default, Left or Right or “as it comes” in Settings - and always vertical middle. The plain URL flavour, and everything with the switch off, is unchanged."
 }

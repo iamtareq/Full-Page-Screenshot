@@ -14,7 +14,8 @@ const DEFAULTS = {
   driveClientId: "",
   driveFolderId: "",
   driveShareAnyone: false,
-  driveLinkLabel: false
+  driveLinkLabel: false,
+  driveLinkAlign: "center"
 };
 
 const els = {
@@ -34,6 +35,7 @@ const els = {
   driveFolderId: document.getElementById("driveFolderId"),
   driveShareAnyone: document.getElementById("driveShareAnyone"),
   driveLinkLabel: document.getElementById("driveLinkLabel"),
+  driveLinkAlign: document.getElementById("driveLinkAlign"),
   qval: document.getElementById("qval"),
   dval: document.getElementById("dval"),
   status: document.getElementById("status")
@@ -106,6 +108,7 @@ async function load() {
   els.driveFolderId.value = cfg.driveFolderId || "";
   els.driveShareAnyone.checked = !!cfg.driveShareAnyone;
   if (els.driveLinkLabel) els.driveLinkLabel.checked = !!cfg.driveLinkLabel;
+  if (els.driveLinkAlign) els.driveLinkAlign.value = ["", "left", "center", "right"].indexOf(cfg.driveLinkAlign) >= 0 ? cfg.driveLinkAlign : "center";
   try {
     const ru = document.getElementById("redirectUri");
     if (ru && chrome.identity && chrome.identity.getRedirectURL) ru.textContent = chrome.identity.getRedirectURL();
@@ -134,7 +137,8 @@ async function save() {
     driveClientId: els.driveClientId.value.trim(),
     driveFolderId: els.driveFolderId.value.trim(),
     driveShareAnyone: els.driveShareAnyone.checked,
-    driveLinkLabel: !!(els.driveLinkLabel && els.driveLinkLabel.checked)
+    driveLinkLabel: !!(els.driveLinkLabel && els.driveLinkLabel.checked),
+    driveLinkAlign: els.driveLinkAlign ? els.driveLinkAlign.value : "center"
   };
   // Turning the feature off should not leave captures sitting in storage.
   if (!settings.recentEnabled) {
