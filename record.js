@@ -683,7 +683,7 @@ function dropPreview() {
 
 /* ------------------------------- the file's name -------------------------------
  * The name outlives the recording: it is what Downloads holds, what Drive shows, and what the
- * checklist's "Click Me" points at six weeks later. So it is editable here, before it goes
+ * checklist's "Watch Me" points at six weeks later. So it is editable here, before it goes
  * anywhere - and editing it after the automatic save renames that file rather than leaving two. */
 const nameParts = (full) => {
   const i = full.lastIndexOf(".");
@@ -978,7 +978,7 @@ async function sendToDrive() {
   setState("uploading");
   setProgress(0, 1);
   try {
-    const { folderId, shareAnyone, linkLabel, linkAlign, linkSize, linkMode } = await getDriveSettings();
+    const { folderId, shareAnyone, linkLabelVideo: linkLabel, linkAlign, linkSize, linkMode } = await getDriveSettings();
     let token = await getDriveToken();
     const up = await driveUpload(token, filename, folderId, blob, blob.type || "video/mp4",
       { onProgress: setProgress, signal: driveAbort.signal });
@@ -1144,7 +1144,7 @@ async function init() {
   el("copyLink").addEventListener("click", async () => {
     if (!lastLink) return;
     try {
-      const { linkLabel, linkAlign, linkSize, linkMode } = await getDriveSettings();
+      const { linkLabelVideo: linkLabel, linkAlign, linkSize, linkMode } = await getDriveSettings();
       await putLinkOnClipboard(lastLink, linkLabel, linkAlign, linkSize, linkMode);
       toast(linkLabel ? "Link copied as “" + linkLabel + "”" : "Link copied");
     } catch (_) { toast("Could not copy — the link is on the Open in Drive button"); }

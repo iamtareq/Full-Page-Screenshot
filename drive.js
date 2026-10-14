@@ -30,6 +30,7 @@ async function getDriveSettings() {
     folderId: parseFolderId(cfg.driveFolderId || team.folderId || ""),
     shareAnyone: !!cfg.driveShareAnyone,
     linkLabel: cfg.driveLinkLabel === true ? (String(cfg.driveLinkLabelText || "").trim() || DRIVE_LABEL) : "",
+    linkLabelVideo: cfg.driveLinkLabel === true ? (String(cfg.driveLinkLabelText || "").trim() || DRIVE_LABEL_VIDEO) : "",
     // Unset means this setting predates the choice: centre it, which is what the sheets the
     // label was built for use. "" is only ever a deliberate pick of "as it comes".
     linkAlign: cfg.driveLinkAlign === undefined ? "center"
@@ -357,6 +358,9 @@ function notifyDrive(title, message, id) {
 }
 
 const DRIVE_LABEL = "Click Me";
+// A recording is not something you click, it is something you watch. Same switch, same cell,
+// different word - and a label typed by hand still wins over both.
+const DRIVE_LABEL_VIDEO = "Watch Me";
 const DRIVE_ALIGNS = ["", "left", "center", "right"];   // "" = claim no alignment at all
 const escHtml = (t) => String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
