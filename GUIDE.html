@@ -221,14 +221,14 @@
   </div>
 
   <h2><span class="em">⏺️</span> Screen recording <span class="tag">NEW</span></h2>
-  <p class="hint">Bug-টা নড়াচড়া করে — screenshot-এ বোঝানো যায় না? Extension-এর icon চেপে <b>Record the screen</b>। Video নিজে থেকেই Downloads-এ save হয়, আর চাইলে screenshot-এর মতোই Drive-এ গিয়ে <b>Click Me</b> link copy হয়ে যায়।</p>
+  <p class="hint">Bug-টা নড়াচড়া করে — screenshot-এ বোঝানো যায় না? Extension-এর icon চেপে <b>Record the screen</b>। Stop দিলে video-টা ওই পাতাতেই থাকে: সরাসরি <b>Drive-এ পাঠান</b> (screenshot-এর মতোই <b>Click Me</b> link copy হয়ে যায়), নাকি <b>PC-তে save</b> করবেন — আপনি ঠিক করবেন।</p>
   <div class="card pad">
     <ol class="steps">
       <li><b>Record the screen</b> চাপলে নতুন একটা tab খোলে (popup-এ না, কারণ Chrome-এর picker এলে popup বন্ধ হয়ে যেত)।</li>
       <li><b>Start recording</b> → Chrome নিজে জিজ্ঞেস করে কী share করবেন: <b>পুরো screen</b>, <b>একটা window</b>, নাকি <b>একটা tab</b>। Share চাপার আগ পর্যন্ত কিছুই record হয় না। (<b>Space</b> চাপলেও শুরু আর থামে।)</li>
       <li>Share-এর পর <b>৩ সেকেন্ড গোনা হয়</b> — এই সময়টুকুতে যেটা record করবেন সেখানে চলে যান, যাতে video-র শুরুতেই আসল জিনিসটা থাকে। রোজ record করলে ওখানেই <i>“Start now, and don’t count down again”</i> চেপে বন্ধ করে দিন (Settings-এ <b>Count down from three</b>)।</li>
       <li>Record চলার সময় page-এ সময় ও file-এর size দেখায়। থামানোর দুটো পথ: page-এর <b>Stop recording</b>, অথবা Chrome-এর নিজের <b>“Stop sharing”</b> bar — দুটোতেই file ঠিকঠাক save হয়।</li>
-      <li>থামার পর video-টা ওখানেই চালিয়ে দেখা যায়, তারপর <b>Send to Drive</b> → link clipboard-এ।</li>
+      <li>থামার পর video-টা ওখানেই চালিয়ে দেখা যায়, নাম বদলানো যায়, তারপর <b>Send to Drive</b> → link clipboard-এ; অথবা <b>Save to this PC</b>। <b>নিজে থেকে Downloads-এ কিছু পড়ে না</b> — যতক্ষণ না পাঠাচ্ছেন বা save করছেন ততক্ষণ video-টা disk-এ নিরাপদে থাকে, tab বন্ধ করতে গেলে browser জিজ্ঞেস করে, আর পরেরবার recorder খুললে ওটা ফেরত আসে।</li>
     </ol>
     <table>
       <tr><td class="k">শব্দ ও format</td><td class="v">Recorder page-এর নিচেই তিনটে switch: <b>Computer sound</b> (default চালু — পাতার নিজের আওয়াজ), <b>My voice</b> (default বন্ধ — microphone), আর <b>WebM / MP4</b>। চেপে দিলেই হবে — Settings-এ গিয়ে ফিরে এসে reload করার দরকার নেই, পরের recording থেকেই কার্যকর (Settings-এও একই switch আছে)। দুটো শব্দই চালু থাকলে মিলিয়ে <b>একটাই sound track</b> হয়, কারণ video file একটার বেশি নিতে পারে না। একটা <b>window</b> share করলে Chrome computer sound দেয় না — তখন record চলার সময় panel-এ সেটা লেখা থাকে, আর লেখাটা পুরো recording জুড়ে থাকে (আগের মতো ৪ সেকেন্ডে মিলিয়ে যায় না)।</td></tr>
@@ -238,7 +238,7 @@
       <tr><td class="k">Tab-টা খুঁজে পাওয়া</td><td class="v">Record চলার সময় ওই tab-এর নামই হয়ে যায় <code>● 02:14 recording</code> আর icon-টা লাল বিন্দু — পনেরোটা tab-এর ভিড়েও চেনা যায়। অন্য tab-এ চলে গেলেও কিছু হয় না, recording চলতেই থাকে।</td></tr>
       <tr><td class="k">Toolbar-এ REC</td><td class="v">Record চলার সময় extension icon-এ লাল <b>REC</b> লেখা থাকে। মাঝখানে screenshot নিলেও ওটা মুছে যায় না — থামলে নিজে থেকেই চলে যায়।</td></tr>
       <tr><td class="k">File ও format</td><td class="v">নাম হয় <code>recording-screen-2026-10-14-143207.webm</code>। Default <b>WebM</b> (VP9 + Opus) — Chrome, Google Drive আর VLC-তে চলে। <b>কেন MP4 না:</b> Chrome 155-এর MP4 recorder এই PC-তে দু'বার পুরো tab crash করিয়েছে (<i>Aw, Snap!</i> — H.264-এর parameter set হারিয়ে ফেলে), WebM-এ ওই জিনিসটাই নেই। File-টা Teams/WhatsApp-এ পাঠাতে হলে Settings-এ <b>Video format → MP4</b> করে নিন (ঝুঁকিটা ওখানেই লেখা আছে)। আকার মোটামুটি <b>প্রতি মিনিটে ১০–৩০ MB</b>, কতটা নড়াচড়া তার উপর।</td></tr>
-      <tr><td class="k">Crash হলে কী হয়</td><td class="v">Record চলার সময় প্রতিটা টুকরো <b>সাথে সাথে disk-এ</b> লেখা হয় (browser-এর নিজের private storage-এ)। তাই tab crash করলে বা ভুলে বন্ধ হয়ে গেলেও যা record হয়েছে তা থাকে — পরেরবার <b>Record the screen</b> খুললেই ওটা নিজে থেকে ফিরে আসে, Downloads-এ save হয়ে যায়, আর উপরে লেখা থাকে কী হয়েছিল। সর্বোচ্চ শেষ ১ সেকেন্ড যেতে পারে। তবু অভ্যাস হিসেবে <b>আগে Stop, পরে tab বন্ধ</b>। খুব লম্বা হলে ৫০০ MB-তে একটা কথা বলে, আর ১.৫ GB বা ১ ঘণ্টায় নিজে থেকেই থামিয়ে save করে ফেলে।</td></tr>
+      <tr><td class="k">Crash হলে কী হয়</td><td class="v">Record চলার সময় প্রতিটা টুকরো <b>সাথে সাথে disk-এ</b> লেখা হয় (browser-এর নিজের private storage-এ)। তাই tab crash করলে বা ভুলে বন্ধ হয়ে গেলেও যা record হয়েছে তা থাকে — পরেরবার <b>Record the screen</b> খুললেই ওটা ফিরে আসে (Drive-এ পাঠানো বা save করা তখনো আপনার হাতে), আর উপরে লেখা থাকে কী হয়েছিল। সর্বোচ্চ শেষ ১ সেকেন্ড যেতে পারে। তবু অভ্যাস হিসেবে <b>আগে Stop, পরে tab বন্ধ</b>। খুব লম্বা হলে ৫০০ MB-তে একটা কথা বলে, আর ১.৫ GB বা ১ ঘণ্টায় নিজে থেকেই থামিয়ে save করে ফেলে।</td></tr>
       <tr><td class="k">Recent-এ থাকে না</td><td class="v">Recent-এর ৩টা ঘর screenshot-এর জন্য; video ওখানে রাখা হয় না। তাই <b>Stop</b> করলেই যে file-টা Downloads-এ যায়, সেটাই আসল copy।</td></tr>
     </table>
     <div class="callout">

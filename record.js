@@ -39,6 +39,10 @@ let previewUrl = null;
 let lastLink = "";
 let lastSurface = "";        // monitor · window · browser, read while the track is still alive
 let lastDownloadId = null;   // so a rename can take the first file away again
+let savedLocally = false;    // this recording has been put in Downloads, by the person asking for it
+// Somewhere other than this tab: Downloads, or Drive. Until then the page says so and the browser
+// asks before the tab closes.
+const isKept = () => savedLocally || !!lastLink;
 let driveAbort = null;
 let stopWaiter = null;       // resolved by finish(), for the popup's "Update now"
 let beat = null;             // keeps the toolbar's REC honest if this tab dies
@@ -643,17 +647,27 @@ async function finish() {
     if (stopWaiter) { const r = stopWaiter; stopWaiter = null; r(); }
     return;
   }
-  // chrome.downloads reads from the object URL while it writes, and a 600 MB file is still
-  // writing long after a screenshot would be done: hold the URL for ten minutes, not one.
-  try {
-    lastDownloadId = await saveBlob(blob, filename, 10 * 60 * 1000);
-    el("savedLine").textContent = "Saved to Downloads ✓  ·  " + filename + "  ·  " + mb(blob.size);
-  } catch (_) {
-    el("savedLine").textContent = "Could not save it automatically — press Save again";
-  }
-  // It is on disk and in Downloads now: the next page load must not offer to recover it.
-  mark({ state: "saved", filename, bytes: blob.size });
+  // Nothing is written to this PC unless it is asked for: most recordings go straight to Drive,
+  // and a Downloads folder full of files nobody wanted is its own problem. It stays on disk here
+  // (and in the marker below) until it is sent or saved, so waiting costs nothing.
+  savedLocally = false;
+  lastDownloadId = null;
+  reflectKept();
+  mark({ state: "unsaved", filename, bytes: blob.size });
   if (stopWaiter) { const r = stopWaiter; stopWaiter = null; r(); }
+}
+
+// The one line under the preview, and the two buttons' sense of urgency.
+function reflectKept() {
+  const line = el("savedLine");
+  if (!line || !blob) return;
+  const size = mb(blob.size);
+  if (lastLink) line.textContent = "Sent to Drive ✓  ·  " + filename + "  ·  " + size;
+  else if (savedLocally) line.textContent = "Saved to this PC ✓  ·  " + filename + "  ·  " + size;
+  else line.textContent = "Ready  ·  " + size + "  ·  not saved anywhere yet";
+  // Discarding something that was never kept should at least say that is what it does.
+  const again = el("again");
+  if (again) again.textContent = isKept() ? "Record another" : "Discard & record another";
 }
 
 function dropPreview() {
@@ -694,6 +708,12 @@ async function commitName() {
   const wasId = lastDownloadId;
   const before = filename;
   filename = next;
+  // Nothing has been written anywhere yet: renaming is just renaming.
+  if (!savedLocally) {
+    await mark({ filename });
+    reflectKept();
+    return;
+  }
   try {
     lastDownloadId = await saveBlob(blob, filename, 10 * 60 * 1000);
     // One file, not two: the automatically saved one goes now that it has been replaced.
@@ -753,11 +773,12 @@ async function checkRecovery() {
   try { r = (await chrome.storage.local.get("fpcRec")).fpcRec; } catch (_) {}
   if (!r || !r.name) return false;
 
-  if (r.state !== "recording") {              // an ordinary leftover: it is already in Downloads
+  if (r.state !== "recording" && r.state !== "unsaved") {    // it was sent or saved: nothing owed
     await storeDrop(r.name);
     await forget();
     return false;
   }
+  const crashed = r.state === "recording";
   const file = await storeFile(r.name).catch(() => null);
   if (!file || !file.size) {                  // nothing was written: nothing to recover
     await storeDrop(r.name);
@@ -775,26 +796,25 @@ async function checkRecovery() {
   // either way, but the tab is not, so the format goes back to the one that cannot crash - and
   // anyone who wants to keep trying MP4 is one press away from it.
   let movedOff = false;
-  if (r.format === "mp4" && cfg.format === "mp4") {
+  if (crashed && r.format === "mp4" && cfg.format === "mp4") {
     cfg.format = "webm";
     reflectSettings();
     await saveSetting("recFormat", "webm");
     movedOff = true;
   }
-  el("crashNote").textContent = "This tab closed or crashed while it was recording" +
-    (r.format === "mp4"
-      ? " — Chrome's MP4 recorder does this on some PCs" + (movedOff ? ", so recording is back on WebM." : ".")
-      : ".") +
-    " Everything that had been written to disk is here.";
+  el("crashNote").textContent = crashed
+    ? "This tab closed or crashed while it was recording" +
+      (r.format === "mp4"
+        ? " — Chrome's MP4 recorder does this on some PCs" + (movedOff ? ", so recording is back on WebM." : ".")
+        : ".") +
+      " Everything that had been written to disk is here."
+    : "This recording was never sent or saved, so it is still here.";
   el("crashNote").hidden = false;
   el("crashBack").hidden = !movedOff;
-  try {
-    lastDownloadId = await saveBlob(blob, filename, 10 * 60 * 1000);
-    el("savedLine").textContent = "Recovered and saved to Downloads ✓  ·  " + filename + "  ·  " + mb(blob.size);
-  } catch (_) {
-    el("savedLine").textContent = "Recovered " + mb(blob.size) + " — press Save again to keep it";
-  }
-  await mark({ state: "saved", filename, bytes: blob.size });
+  savedLocally = false;
+  lastDownloadId = null;
+  reflectKept();
+  await mark({ state: "unsaved", filename, bytes: blob.size });
   return true;
 }
 
@@ -956,6 +976,7 @@ async function sendToDrive() {
     }
 
     lastLink = up.file.webViewLink || ("https://drive.google.com/file/d/" + up.file.id + "/view");
+    await mark({ state: "saved", filename, bytes: blob.size });   // it is somewhere other than here now
     el("openDrive").href = lastLink;
     let copied = false;
     try { await putLinkOnClipboard(lastLink, linkLabel, linkAlign, linkSize, linkMode); copied = true; } catch (_) {}
@@ -963,6 +984,7 @@ async function sendToDrive() {
     line.textContent = (copied ? "Link copied ✓" : "Uploaded ✓ — copy the link below") +
       "  ·  " + vis + (up.rootFallback ? ", to your Drive root" : "");
     setState("uploaded");
+    reflectKept();
     notifyDrive("Recording uploaded ✓",
       (copied ? "Link copied to clipboard — paste it anywhere." : "Uploaded — copy the link manually.") +
       " (" + vis + ")", "fpc-rec-drive");
@@ -1002,7 +1024,7 @@ function fpcEditorState() {
     hasImage: !!(blob && blob.size) || state === "recording",
     marks: 0,
     unsavedMarks: false,
-    unexported: false,                    // it saves itself the moment it stops
+    unexported: !!(blob && blob.size) && !isKept(),   // recorded, but not sent or saved yet
     inRecent: false,
     recentId: null,
     tabId: myTabId,
@@ -1027,7 +1049,7 @@ function resetToIdle() {
   dropPreview();
   if (diskName) { storeDrop(diskName); diskName = ""; }
   forget();
-  blob = null; filename = ""; lastLink = ""; bytes = 0; lastDownloadId = null;
+  blob = null; filename = ""; lastLink = ""; bytes = 0; lastDownloadId = null; savedLocally = false;
   el("nameBox").value = "";
   el("savedLine").textContent = "Saved to Downloads ✓";
   el("crashNote").hidden = true;
@@ -1081,8 +1103,15 @@ async function init() {
 
   el("saveAgain").addEventListener("click", async () => {
     if (!blob || !blob.size) return;
-    try { await saveBlob(blob, filename, 10 * 60 * 1000); toast("Saved again · " + filename); }
-    catch (_) { toast("Could not save it"); }
+    try {
+      // chrome.downloads reads from the object URL while it writes, and a 600 MB file is still
+      // writing long after a screenshot would be done: hold the URL for ten minutes, not one.
+      lastDownloadId = await saveBlob(blob, filename, 10 * 60 * 1000);
+      savedLocally = true;
+      reflectKept();
+      await mark({ state: "saved", filename, bytes: blob.size });
+      toast("Saved to this PC · " + filename);
+    } catch (_) { toast("Could not save it to this PC"); }
   });
   el("toDrive").addEventListener("click", sendToDrive);
   el("cancelUp").addEventListener("click", () => { if (driveAbort) driveAbort.abort(); });
@@ -1098,7 +1127,8 @@ async function init() {
   // Ctrl+W, a middle-click on the tab, or Chrome closing: a recording in flight is worth a
   // question. Everything else here is already on disk.
   window.addEventListener("beforeunload", (e) => {
-    if (state !== "recording" && state !== "uploading") return;
+    const unkept = !!(blob && blob.size) && !isKept();
+    if (state !== "recording" && state !== "uploading" && !unkept) return;
     e.preventDefault();
     e.returnValue = "";
     return "";

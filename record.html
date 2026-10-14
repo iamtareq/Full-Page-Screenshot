@@ -9,8 +9,8 @@
 <body data-state="idle">
   <main class="wrap">
     <h1><img src="icons/icon32.png" alt="" /> Screen recording</h1>
-    <p class="sub">Record the screen, a window, or one tab. The file saves to Downloads on its own,
-      and can go to Drive with the same “Click Me” link your screenshots use.</p>
+    <p class="sub">Record the screen, a window, or one tab. When you stop, send it straight to Drive —
+      with the same “Click Me” link your screenshots use — or save it to this PC.</p>
 
     <!-- ---------------- idle ---------------- -->
     <section class="card" data-when="idle">
@@ -29,8 +29,8 @@
         </span>
         <a href="options.html" id="toSettings" target="_blank" rel="noopener">All settings</a>
       </div>
-      <p class="note" id="idleFacts">Saves to Downloads by itself &middot; keeps going if this tab
-        crashes &middot; stops itself at 1.5&nbsp;GB or 60 minutes.</p>
+      <p class="note" id="idleFacts">Held on disk while it records, so a crash costs a second at most
+        &middot; nothing is written to this PC unless you ask &middot; stops itself at 1.5&nbsp;GB or 60 minutes.</p>
       <p class="note warn" id="fmtWarn" hidden>MP4 plays everywhere, including Teams and WhatsApp —
         but Chrome's MP4 recorder has crashed the recording tab on some PCs. The recording survives
         either way; the tab does not.</p>
@@ -117,12 +117,12 @@
         </label>
         <p class="hint" id="nameHint">This is the name in Downloads, in Drive, and behind
           &ldquo;Click&nbsp;Me&rdquo; in the sheet.</p>
-        <p class="done" id="savedLine">Saved to Downloads ✓</p>
+        <p class="done" id="savedLine">Ready</p>
         <p class="note warn" id="crashNote" hidden></p>
         <p class="note" id="crashBack" hidden><button type="button" class="linkbtn" id="keepMp4">Put MP4 back anyway</button></p>
         <div class="btnrow">
           <button id="toDrive" class="btn primary">Send to Drive</button>
-          <button id="saveAgain" class="btn">Save again</button>
+          <button id="saveAgain" class="btn">Save to this PC</button>
           <button id="again" class="btn">Record another</button>
         </div>
 
