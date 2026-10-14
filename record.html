@@ -93,7 +93,10 @@
         </dl>
         <!-- Anything true for the WHOLE recording says so here, where it stays. -->
         <div class="conds" id="conds"></div>
-        <button id="stop" class="btn danger big">Stop recording</button>
+        <div class="btnrow" style="margin-top:0">
+          <button id="stop" class="btn danger big">Stop recording</button>
+          <button id="showFloat" class="btn" hidden>Show floating timer</button>
+        </div>
         <p class="hint">Chrome’s own <b>“Stop sharing”</b> bar stops it too, and you can leave
           this tab — its title keeps the clock. <span class="kbd">Space</span> stops it from here.</p>
         <p class="note warn" id="bigWarn" hidden></p>

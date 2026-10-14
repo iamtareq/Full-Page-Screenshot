@@ -23,10 +23,9 @@ let audioCtx = null;         // one context for the blend AND the meters
 let meters = null;           // { sys, mic } - an analyser on each source that is being recorded
 let countTimer = null;
 let countLeft = 0;
-let bus = null;              // the floating window, if it is open
-let floatWinId = null;
-let floatPos = null;         // where it was last left, so it opens there again
-let floatOpenedAt = null;    // where WE put it, to tell "left alone" from "moved out of shot"
+let pip = null;              // the floating timer, if it is up
+let pipParts = null;         // its live bits, so the clock can be written straight into them
+let pipRefused = false;      // the browser would not open it without a fresh click
 let rec = null;
 let bytes = 0;
 let startedAt = 0;
@@ -533,7 +532,7 @@ async function startRecorder() {
   el("bigWarn").hidden = true;
   setState("recording");
   setFavicon(true);
-  openFloat();
+  openFloat();                          // the picker may have spent the click; the panel has a button
   onTick();
   ticker = setInterval(onTick, 250);
   announce(true);
@@ -589,7 +588,7 @@ function pumpMeters(ms) {
 function onTick() {
   const ms = Date.now() - startedAt;
   pumpMeters(ms);
-  postTick();
+  updateFloat(ms);
   el("clock").textContent = mmss(ms);
   setTitle(ms);
   el("size").textContent = mb(bytes);
@@ -638,8 +637,7 @@ async function finish() {
   fillName();
   showPreview();
   setState("stopped");
-  postTick();                           // the floating window hears it is over...
-  closeFloat();                         // ...and is closed either way
+  closeFloat();
   if (!blob.size) {
     el("savedLine").textContent = "Nothing was recorded — try again";
     if (stopWaiter) { const r = stopWaiter; stopWaiter = null; r(); }
@@ -800,70 +798,123 @@ async function checkRecovery() {
   return true;
 }
 
-/* ------------------------------- the floating window -------------------------------
- * The thing you are recording is usually not this tab, and Chrome's own sharing bar can be
- * collapsed out of the way. This is a small window of our own that says the recording is still
- * running and can stop it - a separate Chrome window, not something injected into the page, so
- * the extension stays activeTab-only and the page under test is untouched.
+/* ------------------------------- the floating timer -------------------------------
+ * The thing being recorded is almost never this tab, and Chrome's own sharing bar can be
+ * collapsed away - so there was nothing on screen saying a recording was running.
  *
- * It is on the screen, so for a whole-screen recording it would be IN the video. It opens where
- * it was last left: drag it onto a second screen once and it stays out of shot for good. */
-const FLOAT_W = 300, FLOAT_H = 212;   // tall enough for the line about being in the video
+ * It is a Document Picture-in-Picture window: it floats above every other window, including other
+ * applications, and it is not in the taskbar, so it cannot be minimised out of sight. (An ordinary
+ * popup window could be, which is what it replaced.) Nothing is injected into the page being
+ * recorded - this extension still asks for no site access at all.
+ *
+ * One rule shapes the whole thing: requestWindow() CONSUMES the click that allowed it, and
+ * getDisplayMedia needs that same click, so the timer can only be opened after Chrome's picker has
+ * answered. When the browser refuses for want of a fresh click, the recording panel offers a
+ * button instead.
+ */
+const FLOAT_W = 320, FLOAT_H = 186;   // Chrome trims ~56px off the height it is asked for
 
-function postTick() {
-  if (!bus) return;
-  try {
-    bus.postMessage({
-      type: "tick",
-      ms: startedAt ? Date.now() - startedAt : 0,
-      bytes, state,
-      surface: lastSurface,
-      placed: !!(floatPos && floatPos.moved)   // not moved yet = warn that it is in the video
-    });
-  } catch (_) {}
-}
-
-async function openFloat() {
-  if (!cfg.float || floatWinId != null) return;
-  try { floatPos = (await chrome.storage.local.get("recFloatAt")).recFloatAt || null; } catch (_) {}
-  const scr = typeof screen === "object" && screen ? screen : {};
-  const opts = {
-    url: chrome.runtime.getURL("rec-float.html"),
-    type: "popup",
-    width: (floatPos && floatPos.width) || FLOAT_W,
-    height: (floatPos && floatPos.height) || FLOAT_H,
-    focused: false                  // never steal the keyboard from what is being recorded
-  };
-  if (floatPos) {
-    opts.left = floatPos.left;
-    opts.top = floatPos.top;
-  } else {                          // bottom right: the least-in-the-way corner before it is moved
-    opts.left = Math.max(0, (scr.availWidth || 1280) - FLOAT_W - 24);
-    opts.top = Math.max(0, (scr.availHeight || 800) - FLOAT_H - 48);
+const FLOAT_CSS = `
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px;
+    background: #fff; color: #12151a; user-select: none;
+    font: 13px/1.4 -apple-system, "Segoe UI Variable Text", "Segoe UI", system-ui, Roboto, Arial, sans-serif;
   }
-  floatOpenedAt = { left: opts.left, top: opts.top };
+  .top { display: flex; align-items: center; gap: 10px; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; background: #b42318; flex: 0 0 auto;
+         animation: p 1.4s ease-in-out infinite; }
+  @keyframes p { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+  @media (prefers-reduced-motion: reduce) { .dot { animation: none } }
+  .clock { font: 500 26px/1 ui-monospace, "Cascadia Mono", Consolas, monospace;
+           letter-spacing: -.5px; font-variant-numeric: tabular-nums; }
+  .size { margin-left: auto; font-size: 12px; color: #5b6472; font-variant-numeric: tabular-nums; }
+  .row { display: flex; gap: 8px; }
+  button { height: 30px; padding: 0 12px; border-radius: 4px; border: 1px solid #8d95a1;
+           background: #fff; color: #12151a; font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer; }
+  .stop { flex: 1; background: #b42318; border-color: #b42318; color: #fff; }
+  .note { margin: 0; font-size: 11px; line-height: 1.3; color: #5b6472; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #16191d; color: #e6e9ec; }
+    .size, .note { color: #9ba3ae; }
+    button { background: #16191d; color: #e6e9ec; border-color: #646b75; }
+    .stop { background: #fda29b; border-color: #fda29b; color: #2a0b08; }
+    .dot { background: #fda29b; }
+  }`;
+
+// Built here rather than in a page of its own: a Picture-in-Picture window shares this page's
+// script, so the clock is written straight into it with no messaging in between.
+function buildFloatUI(doc) {
+  const style = doc.createElement("style");
+  style.textContent = FLOAT_CSS;
+  doc.head.appendChild(style);
+
+  const top = doc.createElement("div"); top.className = "top";
+  const dot = doc.createElement("span"); dot.className = "dot";
+  const clock = doc.createElement("span"); clock.className = "clock"; clock.textContent = "00:00";
+  const size = doc.createElement("span"); size.className = "size"; size.textContent = "0.0 MB";
+  top.appendChild(dot); top.appendChild(clock); top.appendChild(size);
+
+  const row = doc.createElement("div"); row.className = "row";
+  const stop = doc.createElement("button"); stop.className = "stop"; stop.textContent = "Stop recording";
+  const hide = doc.createElement("button"); hide.textContent = "Hide";
+  stop.addEventListener("click", () => { stop.disabled = true; stop.textContent = "Stopping…"; requestStop(); });
+  hide.addEventListener("click", () => closeFloat());      // the recording carries on
+  row.appendChild(stop); row.appendChild(hide);
+
+  const note = doc.createElement("p"); note.className = "note";
+  note.textContent = "";
+
+  doc.body.appendChild(top); doc.body.appendChild(row); doc.body.appendChild(note);
+  return { clock, size, note };
+}
+
+async function openFloat(fromClick) {
+  if (!cfg.float || pip) return false;
+  const api = typeof documentPictureInPicture === "object" ? documentPictureInPicture : null;
+  if (!api || !api.requestWindow) { pipRefused = true; reflectFloatBtn(); return false; }
   try {
-    const w = await chrome.windows.create(opts);
-    floatWinId = w && w.id;
-  } catch (_) { floatWinId = null; }
+    pip = await api.requestWindow({ width: FLOAT_W, height: FLOAT_H, disallowReturnToOpener: true });
+    pipParts = buildFloatUI(pip.document);
+    pip.addEventListener("pagehide", () => { pip = null; pipParts = null; reflectFloatBtn(); });
+    pipRefused = false;
+    reflectFloatBtn();
+    updateFloat(startedAt ? Date.now() - startedAt : 0);
+    return true;
+  } catch (_) {
+    // Almost always "no transient activation": the click that started the recording was spent on
+    // Chrome's own picker. The button in the panel is a fresh click, and that always works.
+    pip = null; pipParts = null;
+    pipRefused = true;
+    if (fromClick) toast("Chrome would not open the floating timer");
+    reflectFloatBtn();
+    return false;
+  }
 }
 
-async function closeFloat() {
-  if (floatWinId == null) return;
-  const id = floatWinId;
-  floatWinId = null;
-  try { await chrome.windows.remove(id); } catch (_) {}
+function updateFloat(ms) {
+  if (!pip || !pipParts) return;
+  pipParts.clock.textContent = mmss(ms);
+  pipParts.size.textContent = mb(bytes);
+  // It is a window on the screen, so a whole-screen recording contains it. Say so once, quietly.
+  pipParts.note.textContent = lastSurface === "monitor"
+    ? "This window is in a whole-screen recording."
+    : "";
 }
 
-async function saveFloatAt(m) {
-  if (!m || typeof m.left !== "number") return;
-  // Closing it where we put it is not the same as moving it: the line about being in the video
-  // stays until it has actually been dragged somewhere else (another screen, usually).
-  const near = floatOpenedAt &&
-    Math.abs(m.left - floatOpenedAt.left) < 40 && Math.abs(m.top - floatOpenedAt.top) < 40;
-  const moved = (floatPos && floatPos.moved) || !near;
-  floatPos = { left: m.left, top: m.top, width: m.width, height: m.height, moved };
-  try { await chrome.storage.local.set({ recFloatAt: floatPos }); } catch (_) {}
+function closeFloat() {
+  if (!pip) return;
+  try { pip.close(); } catch (_) {}
+  pip = null; pipParts = null;
+  reflectFloatBtn();
+}
+
+// The panel's own way back to it, for when the browser wanted a fresh click.
+function reflectFloatBtn() {
+  const b = el("showFloat");
+  if (!b) return;
+  b.hidden = !(cfg.float && state === "recording" && !pip);
 }
 
 /* ------------------------------- the tab, and the badge ------------------------------- */
@@ -1001,6 +1052,7 @@ async function init() {
   el("micSkip").addEventListener("click", onMicSkip);
   el("stop").addEventListener("click", requestStop);
   el("countCancel").addEventListener("click", cancelCountdown);
+  el("showFloat").addEventListener("click", () => openFloat(true));
   el("keepMp4").addEventListener("click", async () => {
     await setFormat("mp4");
     el("crashBack").hidden = true;
@@ -1051,18 +1103,6 @@ async function init() {
     e.returnValue = "";
     return "";
   });
-
-  // One channel between this page and its floating window. Same extension, same origin, no
-  // permission - and nothing else listens on it.
-  try {
-    bus = new BroadcastChannel("fpc-rec");
-    bus.onmessage = (e) => {
-      const m = (e && e.data) || {};
-      if (m.type === "stop") requestStop();
-      else if (m.type === "floatReady") postTick();     // answer at once, so its clock is right
-      else if (m.type === "floatAt") saveFloatAt(m);
-    };
-  } catch (_) { bus = null; }
 
   await checkRecovery();
 
