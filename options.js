@@ -20,7 +20,8 @@ const DEFAULTS = {
   driveLinkMode: "html",
   recSystemAudio: true,          // the page's own sound: what a bug report usually needs
   recMic: false,                 // a voice-over is a deliberate choice, not a default
-  recFormat: "webm"              // Chrome 155's MP4 muxer crashed a recording tab; WebM cannot
+  recFormat: "webm",             // Chrome 155's MP4 muxer crashed a recording tab; WebM cannot
+  recCountdown: true             // three seconds between Share and the first frame
 };
 
 const els = {
@@ -46,6 +47,7 @@ const els = {
   recSystemAudio: document.getElementById("recSystemAudio"),
   recMic: document.getElementById("recMic"),
   recFormat: document.getElementById("recFormat"),
+  recCountdown: document.getElementById("recCountdown"),
   qval: document.getElementById("qval"),
   dval: document.getElementById("dval"),
   status: document.getElementById("status")
@@ -138,6 +140,7 @@ async function load() {
   if (els.recSystemAudio) els.recSystemAudio.checked = cfg.recSystemAudio !== false;
   if (els.recMic) els.recMic.checked = cfg.recMic === true;
   if (els.recFormat) els.recFormat.value = cfg.recFormat === "mp4" ? "mp4" : "webm";
+  if (els.recCountdown) els.recCountdown.checked = cfg.recCountdown !== false;
   try {
     const ru = document.getElementById("redirectUri");
     if (ru && chrome.identity && chrome.identity.getRedirectURL) ru.textContent = chrome.identity.getRedirectURL();
@@ -172,7 +175,8 @@ async function save() {
     driveLinkMode: els.driveLinkMode ? els.driveLinkMode.value : "html",
     recSystemAudio: !(els.recSystemAudio && !els.recSystemAudio.checked),
     recMic: !!(els.recMic && els.recMic.checked),
-    recFormat: els.recFormat && els.recFormat.value === "mp4" ? "mp4" : "webm"
+    recFormat: els.recFormat && els.recFormat.value === "mp4" ? "mp4" : "webm",
+    recCountdown: !(els.recCountdown && !els.recCountdown.checked)
   };
   // Turning the feature off should not leave captures sitting in storage.
   if (!settings.recentEnabled) {

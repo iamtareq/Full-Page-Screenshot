@@ -56,6 +56,21 @@
         nothing happens at all.</p>
     </section>
 
+    <!-- ---------------- counting down ----------------
+         Recording used to start on the same click that dismissed Chrome's picker, so every file
+         opened on the recorder tab while the person went looking for the bug. -->
+    <section class="card pad" data-when="counting">
+      <div class="stack">
+        <p class="count" id="countNum" aria-live="assertive">3</p>
+        <p class="hint"><b>Switch to what you want to record.</b><br />
+          Recording starts when the count reaches zero.</p>
+        <div class="btnrow">
+          <button id="countCancel" class="btn">Cancel</button>
+          <button id="countSkip" class="linkbtn">Start now, and don’t count down again</button>
+        </div>
+      </div>
+    </section>
+
     <!-- ---------------- recording ---------------- -->
     <section class="card" data-when="recording">
       <div class="pad">
@@ -65,7 +80,15 @@
           <span id="size">0.0 MB</span></p>
         <dl class="facts">
           <div><dt>Sharing</dt><dd id="factSurface">—</dd></div>
-          <div><dt>Sound</dt><dd id="factAudio">—</dd></div>
+          <!-- Only where there is nothing to meter: otherwise the meters below say it better. -->
+          <div id="rowSound"><dt>Sound</dt><dd id="factAudio">—</dd></div>
+          <!-- Words say what was asked for. These say what is arriving. -->
+          <div id="rowSys" hidden><dt>Computer sound</dt><dd class="lvl">
+            <span class="meter dead" id="meterSys"><i></i><i></i><i></i><i></i><i></i></span>
+            <span id="wordSys">listening…</span></dd></div>
+          <div id="rowMic" hidden><dt>Your voice</dt><dd class="lvl">
+            <span class="meter dead" id="meterMic"><i></i><i></i><i></i><i></i><i></i></span>
+            <span id="wordMic">listening…</span></dd></div>
           <div><dt>Saving as</dt><dd id="factFormat">—</dd></div>
         </dl>
         <!-- Anything true for the WHOLE recording says so here, where it stays. -->

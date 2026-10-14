@@ -12,13 +12,17 @@
 const el = (id) => document.getElementById(id);
 
 /* ------------------------------- state ------------------------------- */
-let state = "idle";          // idle · micAsk · picking · recording · stopped · uploading · uploaded
+let state = "idle";          // idle · micAsk · picking · counting · recording · stopped · uploading · uploaded
 let myTabId = null;
-let cfg = { sys: true, mic: false, format: "webm" };
+let cfg = { sys: true, mic: false, format: "webm", countdown: true };
 
 let display = null;          // the stream Chrome's picker handed over
 let micStream = null;
 let mixer = null;            // { ctx, dest } when two sound sources are blended into one track
+let audioCtx = null;         // one context for the blend AND the meters
+let meters = null;           // { sys, mic } - an analyser on each source that is being recorded
+let countTimer = null;
+let countLeft = 0;
 let rec = null;
 let bytes = 0;
 let startedAt = 0;
@@ -43,6 +47,7 @@ const MAX_BYTES = 1.5 * 1024 * 1024 * 1024;
 const MAX_MS = 60 * 60 * 1000;
 // Chunked so the size counter is honest while recording. A `let` so a test can shorten it.
 let TIMESLICE_MS = 1000;
+let COUNT_FROM = 3;          // seconds between Share and the first frame; a `let` for the tests
 const VIDEO_BPS = 4000000;   // ~30 MB a minute: 12px ERP text stays readable at 1080p
 const AUDIO_BPS = 128000;
 
@@ -127,6 +132,7 @@ async function loadSettings() {
   cfg.sys = s.recSystemAudio !== false;      // default on
   cfg.mic = s.recMic === true;               // default off
   cfg.format = s.recFormat === "mp4" ? "mp4" : "webm";   // WebM unless asked otherwise: see pickMime
+  cfg.countdown = s.recCountdown !== false;  // default on: the first ten recordings are worth it
   reflectSettings();
 }
 
@@ -255,17 +261,74 @@ async function begin(withMic) {
          : "Could not start: " + ((e && e.message) || name || "unknown error"));
     return;
   }
-  await startRecorder();
+  // Three seconds to get back to what you are recording, unless this person has turned it off.
+  if (cfg.countdown) beginCountdown();
+  else await startRecorder();
+}
+
+/* ------------------------------- the countdown -------------------------------
+ * Chrome's picker closes on a click, and recording used to begin on that same click - so every
+ * recording opened with a few seconds of the recorder tab while the person went to find the bug.
+ * The capture is live during the count; it is simply not being recorded yet. */
+function beginCountdown() {
+  countLeft = COUNT_FROM;
+  el("countNum").textContent = String(countLeft);
+  setState("counting");
+  clearInterval(countTimer);
+  countTimer = setInterval(() => {
+    countLeft--;
+    if (countLeft > 0) { el("countNum").textContent = String(countLeft); return; }
+    clearInterval(countTimer); countTimer = null;
+    startRecorder();
+  }, 1000);
+}
+
+function cancelCountdown() {
+  clearInterval(countTimer); countTimer = null;
+  stopEverything();                     // Chrome stops sharing: nothing was recorded, nothing kept
+  setState("idle");
+  toast("Cancelled — nothing was recorded");
+}
+
+// For the person who records twenty a day: turn it off by pressing the thing in front of them.
+function skipCountdown() {
+  clearInterval(countTimer); countTimer = null;
+  cfg.countdown = false;
+  saveSetting("recCountdown", false);
+  startRecorder();
 }
 
 // Chrome's muxer writes ONE audio track. With both sources on they have to be blended, or the
 // file silently carries whichever track happened to come first.
+// An analyser on a source track, in a graph that is actually being pulled: an analyser hanging off
+// nothing is never asked for data, so it would report a flat line whatever the microphone is doing.
+function meterFor(ctx, track) {
+  const src = ctx.createMediaStreamSource(new MediaStream([track]));
+  const an = ctx.createAnalyser();
+  an.fftSize = 256;
+  an.smoothingTimeConstant = 0.4;
+  src.connect(an);
+  const silent = ctx.createGain();
+  silent.gain.value = 0;                // nothing comes out of the speakers: this is only a tap
+  an.connect(silent).connect(ctx.destination);
+  return { an, data: new Uint8Array(an.fftSize), seen: false };
+}
+
 function buildAudio() {
   const sys = display.getAudioTracks();
   const mic = micStream ? micStream.getAudioTracks() : [];
+  if (sys.length || mic.length) {
+    try { audioCtx = new AudioContext(); } catch (_) { audioCtx = null; }
+    if (audioCtx) {
+      meters = {};
+      if (sys.length) meters.sys = meterFor(audioCtx, sys[0]);
+      if (mic.length) meters.mic = meterFor(audioCtx, mic[0]);
+    }
+  }
   if (sys.length && mic.length) {
     try {
-      const ctx = new AudioContext();
+      const ctx = audioCtx || new AudioContext();
+      audioCtx = ctx;
       const dest = ctx.createMediaStreamDestination();
       [sys[0], mic[0]].forEach((track) => {
         ctx.createMediaStreamSource(new MediaStream([track])).connect(dest);
@@ -392,6 +455,7 @@ async function forget() {
 }
 
 async function startRecorder() {
+  clearInterval(countTimer); countTimer = null;
   const video = display.getVideoTracks()[0];
   if (!video) { stopEverything(); setState("idle"); toast("Chrome shared no picture \u2014 nothing to record"); return; }
   const audio = buildAudio();
@@ -450,6 +514,10 @@ async function startRecorder() {
   el("factSurface").textContent = (SURFACE_WORDS[s.displaySurface] || "your screen") +
     (s.width && s.height ? " · " + s.width + "×" + s.height : "");
   el("factAudio").textContent = audio.words;
+  el("rowSys").hidden = !(meters && meters.sys);
+  el("rowMic").hidden = !(meters && meters.mic);
+  // The words are for the case the meters cannot cover: no sound at all.
+  el("rowSound").hidden = !!(meters && (meters.sys || meters.mic));
   // Chrome offers the computer's sound for a whole screen or a tab, never for a single window.
   if (audio.sysMissing) {
     cond("sys", "This surface offers no computer sound — Chrome only shares it for a whole screen or a tab.");
@@ -477,8 +545,43 @@ const mmss = (ms) => {
 };
 const mb = (n) => (n / 1048576).toFixed(1) + " MB";
 
+// Five bars, from the loudest sample in the last frame. The point is not precision; it is the
+// difference between "something is arriving" and "nothing has arrived since you started".
+function drawMeter(box, level) {
+  const bars = box.children || [];
+  for (let i = 0; i < bars.length; i++) {
+    const f = Math.max(0, Math.min(1, level * 1.4 - i * 0.18));
+    bars[i].style.height = (2 + Math.round(f * 12)) + "px";
+  }
+}
+
+function pumpMeters(ms) {
+  if (!meters) return;
+  [["sys", "meterSys", "wordSys"], ["mic", "meterMic", "wordMic"]].forEach(([key, boxId, wordId]) => {
+    const m = meters[key];
+    if (!m) return;
+    const box = el(boxId), word = el(wordId);
+    let peak = 0;
+    try {
+      m.an.getByteTimeDomainData(m.data);
+      for (let i = 0; i < m.data.length; i += 4) {
+        const v = Math.abs(m.data[i] - 128);
+        if (v > peak) peak = v;
+      }
+    } catch (_) {}
+    const level = Math.min(1, peak / 40);        // 40 of 128 is ordinary speech
+    if (level > 0.08) m.seen = true;
+    if (box) {
+      drawMeter(box, level);
+      box.classList.toggle("dead", !m.seen);
+    }
+    if (word) word.textContent = m.seen ? "arriving" : (ms > 2500 ? "silent since you started" : "listening…");
+  });
+}
+
 function onTick() {
   const ms = Date.now() - startedAt;
+  pumpMeters(ms);
   el("clock").textContent = mmss(ms);
   setTitle(ms);
   el("size").textContent = mb(bytes);
@@ -616,9 +719,11 @@ function stopTracks(s) {
 function stopEverything() {
   stopTracks(display); display = null;
   stopTracks(micStream); micStream = null;
-  if (mixer) {
-    try { mixer.ctx.close(); } catch (_) {}
-    mixer = null;
+  mixer = null;
+  meters = null;
+  if (audioCtx) {
+    try { audioCtx.close(); } catch (_) {}
+    audioCtx = null;
   }
 }
 
@@ -807,6 +912,8 @@ async function init() {
   el("micAllow").addEventListener("click", onMicAllow);
   el("micSkip").addEventListener("click", onMicSkip);
   el("stop").addEventListener("click", requestStop);
+  el("countCancel").addEventListener("click", cancelCountdown);
+  el("countSkip").addEventListener("click", skipCountdown);
   el("again").addEventListener("click", () => { if (state !== "uploading") resetToIdle(); });
   const nameBox = el("nameBox");
   nameBox.addEventListener("change", commitName);
@@ -817,6 +924,7 @@ async function init() {
 
   // The keyboard, but only while this page has focus - it never reaches the page being recorded.
   window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && state === "counting") { e.preventDefault(); cancelCountdown(); return; }
     if (e.code !== "Space" || e.ctrlKey || e.altKey || e.metaKey) return;
     const t = e.target;
     const tag = t && t.tagName ? t.tagName.toLowerCase() : "";
