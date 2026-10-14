@@ -19,7 +19,8 @@ const DEFAULTS = {
   driveLinkSize: "",
   driveLinkMode: "html",
   recSystemAudio: true,          // the page's own sound: what a bug report usually needs
-  recMic: false                  // a voice-over is a deliberate choice, not a default
+  recMic: false,                 // a voice-over is a deliberate choice, not a default
+  recFormat: "webm"              // Chrome 155's MP4 muxer crashed a recording tab; WebM cannot
 };
 
 const els = {
@@ -44,6 +45,7 @@ const els = {
   driveLinkMode: document.getElementById("driveLinkMode"),
   recSystemAudio: document.getElementById("recSystemAudio"),
   recMic: document.getElementById("recMic"),
+  recFormat: document.getElementById("recFormat"),
   qval: document.getElementById("qval"),
   dval: document.getElementById("dval"),
   status: document.getElementById("status")
@@ -135,6 +137,7 @@ async function load() {
   if (els.driveLinkMode) els.driveLinkMode.value = cfg.driveLinkMode === "formula" ? "formula" : "html";
   if (els.recSystemAudio) els.recSystemAudio.checked = cfg.recSystemAudio !== false;
   if (els.recMic) els.recMic.checked = cfg.recMic === true;
+  if (els.recFormat) els.recFormat.value = cfg.recFormat === "mp4" ? "mp4" : "webm";
   try {
     const ru = document.getElementById("redirectUri");
     if (ru && chrome.identity && chrome.identity.getRedirectURL) ru.textContent = chrome.identity.getRedirectURL();
@@ -168,7 +171,8 @@ async function save() {
     driveLinkSize: els.driveLinkSize ? els.driveLinkSize.value.trim() : "",
     driveLinkMode: els.driveLinkMode ? els.driveLinkMode.value : "html",
     recSystemAudio: !(els.recSystemAudio && !els.recSystemAudio.checked),
-    recMic: !!(els.recMic && els.recMic.checked)
+    recMic: !!(els.recMic && els.recMic.checked),
+    recFormat: els.recFormat && els.recFormat.value === "mp4" ? "mp4" : "webm"
   };
   // Turning the feature off should not leave captures sitting in storage.
   if (!settings.recentEnabled) {

@@ -1,4 +1,4 @@
 {
-  "version": "1.7.0",
-  "notes": "Screen recording. The extension can now record the screen, a window or a tab - press Record the screen in the popup. The file saves to Downloads by itself and can go to Drive with the same Click Me link a screenshot uses. Computer sound is on by default and your voice is off; both together are blended into one track. Chrome's own Stop sharing bar stops it as well as the page's own button, the toolbar shows REC while it runs, and Update now will not close a recording without asking. No new permission: Chrome's share picker is the permission."
+  "version": "1.7.1",
+  "notes": "A recording can no longer be lost. Chrome 155's MP4 recorder crashed the recording tab on at least one PC (MP4Status::kFailedToLookupSPS, an \"Aw, Snap!\"), and the recording went with it, so two things changed. Recordings are now saved as WebM by default, which has none of the H.264 machinery that crashed - MP4 is still there, in Settings, for a file that has to go into Teams or WhatsApp. And whichever format you pick, every second of the recording is written to disk as it is made: if the tab dies, the next time you open the recorder it hands the recording back and saves it, minus at most the last second. The toolbar's REC also clears itself now when a recorder tab stops answering."
 }

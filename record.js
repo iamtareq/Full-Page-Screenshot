@@ -14,13 +14,12 @@ const el = (id) => document.getElementById(id);
 /* ------------------------------- state ------------------------------- */
 let state = "idle";          // idle · micAsk · picking · recording · stopped · uploading · uploaded
 let myTabId = null;
-let cfg = { sys: true, mic: false };
+let cfg = { sys: true, mic: false, format: "webm" };
 
 let display = null;          // the stream Chrome's picker handed over
 let micStream = null;
 let mixer = null;            // { ctx, dest } when two sound sources are blended into one track
 let rec = null;
-let chunks = [];
 let bytes = 0;
 let startedAt = 0;
 let ticker = null;
@@ -34,9 +33,10 @@ let lastLink = "";
 let lastSurface = "";        // monitor · window · browser, read while the track is still alive
 let driveAbort = null;
 let stopWaiter = null;       // resolved by finish(), for the popup's "Update now"
+let beat = null;             // keeps the toolbar's REC honest if this tab dies
 
-// A recording is held in memory until it stops, so there is a ceiling. A saved big file beats a
-// crashed tab: warn at 500 MB, stop and save at 1.5 GB or an hour.
+// The recording goes to disk as it is made, so memory is no longer the limit - but a file this
+// size is unwieldy to upload and to watch, so: a word at 500 MB, stop and save at 1.5 GB or an hour.
 const WARN_BYTES = 500 * 1024 * 1024;
 const MAX_BYTES = 1.5 * 1024 * 1024 * 1024;
 const MAX_MS = 60 * 60 * 1000;
@@ -73,11 +73,13 @@ async function loadSettings() {
   try { s = (await chrome.storage.sync.get("settings")).settings || {}; } catch (_) {}
   cfg.sys = s.recSystemAudio !== false;      // default on
   cfg.mic = s.recMic === true;               // default off
-  const sys = el("chipSys"), mic = el("chipMic");
+  cfg.format = s.recFormat === "mp4" ? "mp4" : "webm";   // WebM unless asked otherwise: see pickMime
+  const sys = el("chipSys"), mic = el("chipMic"), fmt = el("chipFmt");
   sys.dataset.on = cfg.sys ? "1" : "0";
   mic.dataset.on = cfg.mic ? "1" : "0";
   sys.textContent = cfg.sys ? "Computer sound: on" : "Computer sound: off";
   mic.textContent = cfg.mic ? "Microphone: on" : "Microphone: off";
+  if (fmt) { fmt.dataset.on = "1"; fmt.textContent = cfg.format === "mp4" ? "Saves as MP4" : "Saves as WebM"; }
 }
 
 // "off" when the switch is off, otherwise what Chrome says about this page's permission.
@@ -148,7 +150,7 @@ async function begin(withMic) {
          : "Could not start: " + ((e && e.message) || name || "unknown error"));
     return;
   }
-  startRecorder();
+  await startRecorder();
 }
 
 // Chrome's muxer writes ONE audio track. With both sources on they have to be blended, or the
@@ -174,17 +176,114 @@ function buildAudio() {
   return { tracks: [], words: cfg.sys ? "none — this surface offers no sound" : "none" };
 }
 
+// WebM first, and deliberately. On 2026-10-14 Chrome 155's MP4 muxer killed this page's renderer
+// twice on a real screen capture - MP4Status::kFailedToLookupSPS, i.e. it lost track of H.264's
+// parameter sets coming out of the Intel hardware encoder - and an "Aw, Snap!" takes the recording
+// with it. VP8/VP9 have no parameter sets, so that whole class of failure cannot happen. MP4 is
+// still one switch away in Settings, for a file that has to go into Teams or WhatsApp.
+const MIMES = {
+  webm: {
+    sound: ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"],
+    mute: ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"]
+  },
+  mp4: {
+    sound: ["video/mp4;codecs=avc1.42E01E,mp4a.40.2", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm"],
+    mute: ["video/mp4;codecs=avc1.42E01E", "video/mp4", "video/webm;codecs=vp9", "video/webm"]
+  }
+};
 function pickMime(withAudio) {
-  const want = withAudio
-    ? ["video/mp4;codecs=avc1.42E01E,mp4a.40.2", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm"]
-    : ["video/mp4;codecs=avc1.42E01E", "video/mp4", "video/webm;codecs=vp9", "video/webm"];
+  const want = (MIMES[cfg.format] || MIMES.webm)[withAudio ? "sound" : "mute"];
   for (const m of want) {
     try { if (MediaRecorder.isTypeSupported(m)) return m; } catch (_) {}
   }
   return "";                                  // let Chrome pick, and read it back from the recorder
 }
 
-function startRecorder() {
+/* ------------------- the recording on disk, not only in this tab -------------------
+ * Every chunk goes straight into the origin's private file system (rec-store.js, in a worker,
+ * flushing as it writes). Two things fall out of that: a renderer crash costs the last second
+ * instead of the whole recording, and the finished file is read back as a disk-backed File, so
+ * even a gigabyte never sits in this tab's memory. */
+const STORE_SCRIPT = "rec-store.js";
+let store = null;            // { worker, name } while a recording is being written
+let storeSeq = 0;
+const storeWaiting = new Map();
+let memChunks = [];          // whatever could not go to disk - the fallback, and usually empty
+let diskName = "";           // the OPFS file this recording is in
+
+function storeCall(msg, transfer) {
+  if (!store) return Promise.reject(new Error("NO_STORE"));
+  const id = ++storeSeq;
+  return new Promise((resolve, reject) => {
+    storeWaiting.set(id, { resolve, reject });
+    store.worker.postMessage(Object.assign({ id }, msg), transfer || []);
+  });
+}
+
+async function storeOpen(name) {
+  if (!navigator.storage || !navigator.storage.getDirectory) throw new Error("NO_OPFS");
+  const worker = new Worker(STORE_SCRIPT);
+  worker.onmessage = (e) => {
+    const w = storeWaiting.get(e.data.id);
+    if (!w) return;
+    storeWaiting.delete(e.data.id);
+    e.data.ok ? w.resolve(e.data) : w.reject(new Error(e.data.error || "STORE_FAILED"));
+  };
+  worker.onerror = () => { storeWaiting.forEach((w) => w.reject(new Error("STORE_DIED"))); storeWaiting.clear(); };
+  store = { worker, name };
+  await storeCall({ op: "open", name });
+  diskName = name;
+}
+
+// One chunk at a time, in order: the worker appends at a running offset, so two chunks whose
+// arrayBuffer() happened to resolve out of order would scramble the file. A write that fails
+// drops that chunk into memory instead, and the recording carries on either way.
+let writeQueue = Promise.resolve();
+function storeWrite(data) {
+  if (!store) { memChunks.push(data); return; }
+  writeQueue = writeQueue
+    .then(() => data.arrayBuffer())
+    .then((buf) => storeCall({ op: "write", buf }, [buf]))
+    .catch(() => { memChunks.push(data); });   // disk went away mid-recording; keep the bytes
+}
+
+async function storeClose() {
+  if (!store) return;
+  try { await writeQueue; } catch (_) {}      // the last chunk is still on its way to the worker
+  try { await storeCall({ op: "close" }); } catch (_) {}
+  try { store.worker.terminate(); } catch (_) {}
+  store = null;
+}
+
+// The finished recording, straight off disk - a File is a Blob, and nothing is copied into memory.
+async function storeFile(name) {
+  const root = await navigator.storage.getDirectory();
+  const dir = await root.getDirectoryHandle("fpc-rec", { create: false });
+  const fh = await dir.getFileHandle(name, { create: false });
+  return fh.getFile();
+}
+
+async function storeDrop(name) {
+  if (!name) return;
+  try {
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle("fpc-rec", { create: false });
+    await dir.removeEntry(name);
+  } catch (_) {}
+}
+
+// What the next page load reads to find out whether this tab died mid-recording.
+async function mark(fields) {
+  try {
+    const got = await chrome.storage.local.get("fpcRec");
+    await chrome.storage.local.set({ fpcRec: Object.assign({}, got.fpcRec, fields) });
+  } catch (_) {}
+}
+async function forget() {
+  try { await chrome.storage.local.remove("fpcRec"); } catch (_) {}
+}
+
+async function startRecorder() {
   const video = display.getVideoTracks()[0];
   if (!video) { stopEverything(); setState("idle"); toast("Chrome shared no picture \u2014 nothing to record"); return; }
   const audio = buildAudio();
@@ -203,8 +302,23 @@ function startRecorder() {
     }
   }
 
-  chunks = []; bytes = 0; stopping = false; warned = false;
-  rec.ondataavailable = (e) => { if (e.data && e.data.size) { chunks.push(e.data); bytes += e.data.size; } };
+  // Open the file BEFORE recording starts, so the very first chunk has somewhere to land. The
+  // previous recording is already in Downloads, so its copy here has done its job.
+  if (diskName) { storeDrop(diskName); diskName = ""; }
+  dropPreview();
+  blob = null;
+  el("crashNote").hidden = true;
+  writeQueue = Promise.resolve();
+  diskName = "rec-" + Date.now().toString(36) + (/mp4/.test(mime) ? ".mp4" : ".webm");
+  try {
+    await storeOpen(diskName);
+  } catch (_) {
+    store = null; diskName = "";
+    toast("This recording is being held in the tab, not on disk \u2014 don't close the tab");
+  }
+
+  memChunks = []; bytes = 0; stopping = false; warned = false;
+  rec.ondataavailable = (e) => { if (e.data && e.data.size) { bytes += e.data.size; storeWrite(e.data); } };
   rec.onstop = finish;
   rec.onerror = () => { toast("The recorder stopped with an error — saving what there is"); requestStop(); };
   // Chrome's own "Stop sharing" bar ends the track, not the recorder. Without this the recording
@@ -220,6 +334,7 @@ function startRecorder() {
     return;
   }
   startedAt = Date.now();
+  mark({ name: diskName, mime: rec.mimeType || "", format: cfg.format, startedAt, state: "recording" });
   const s = video.getSettings ? video.getSettings() : {};
   // Read now, kept for the filename: by the time the file is named the track is stopped and
   // getSettings() has nothing left to say.
@@ -234,6 +349,9 @@ function startRecorder() {
   onTick();
   ticker = setInterval(onTick, 250);
   announce(true);
+  // A heartbeat, so a tab that dies without being closed cannot leave REC on the toolbar for ever.
+  clearInterval(beat);
+  beat = setInterval(() => announce(true), 10000);
   holdTab(true);
 }
 
@@ -253,7 +371,7 @@ function onTick() {
   if (!warned && bytes >= WARN_BYTES) {
     warned = true;
     el("bigWarn").textContent = "This recording is over " + mb(WARN_BYTES) +
-      ". It is held in this tab until it stops, so stop soon rather than losing it.";
+      ". It is safe on disk, but a file this big is slow to upload and to watch.";
     el("bigWarn").hidden = false;
   }
   if (bytes >= MAX_BYTES || ms >= MAX_MS) {
@@ -274,13 +392,20 @@ function requestStop() {
 
 async function finish() {
   clearInterval(ticker); ticker = null;
+  clearInterval(beat); beat = null;
   const mime = (rec && rec.mimeType) || "video/webm";
   stopEverything();
   announce(false);
   holdTab(false);
 
-  blob = new Blob(chunks, { type: mime.replace(/;.*$/, "") });
-  chunks = [];
+  await storeClose();
+  const type = mime.replace(/;.*$/, "");
+  let onDisk = null;
+  if (diskName) onDisk = await storeFile(diskName).catch(() => null);
+  // Normally all of it is the one file on disk; memChunks only holds what a failed write caught.
+  blob = onDisk && !memChunks.length ? onDisk
+       : new Blob((onDisk ? [onDisk] : []).concat(memChunks), { type });
+  memChunks = [];
   filename = recName(mime);
   lastLink = "";
   showPreview();
@@ -298,7 +423,14 @@ async function finish() {
   } catch (_) {
     el("savedLine").textContent = "Could not save it automatically — press Save again";
   }
+  // It is on disk and in Downloads now: the next page load must not offer to recover it.
+  mark({ state: "saved", filename, bytes: blob.size });
   if (stopWaiter) { const r = stopWaiter; stopWaiter = null; r(); }
+}
+
+function dropPreview() {
+  if (previewUrl) { try { URL.revokeObjectURL(previewUrl); } catch (_) {} previewUrl = null; }
+  el("preview").removeAttribute("src");
 }
 
 function showPreview() {
@@ -331,6 +463,47 @@ function recName(mime) {
   return "recording-" + kind + "-" + d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
     "-" + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds()) +
     "." + (/mp4/.test(mime) ? "mp4" : "webm");
+}
+
+/* ------------------------------- recovering a lost recording ------------------------------- */
+// chrome.storage.local says whether the last recording ever reached a clean stop. If it did not,
+// the bytes that made it to disk are still there - which is the whole reason they go to disk.
+async function checkRecovery() {
+  let r = null;
+  try { r = (await chrome.storage.local.get("fpcRec")).fpcRec; } catch (_) {}
+  if (!r || !r.name) return false;
+
+  if (r.state !== "recording") {              // an ordinary leftover: it is already in Downloads
+    await storeDrop(r.name);
+    await forget();
+    return false;
+  }
+  const file = await storeFile(r.name).catch(() => null);
+  if (!file || !file.size) {                  // nothing was written: nothing to recover
+    await storeDrop(r.name);
+    await forget();
+    return false;
+  }
+
+  diskName = r.name;
+  blob = file;
+  filename = r.filename || recName(r.mime || "video/webm");
+  showPreview();
+  setState("stopped");
+  el("crashNote").textContent = "This tab closed or crashed while it was recording" +
+    (r.format === "mp4"
+      ? " — Chrome's MP4 recorder is known to crash on some PCs. Settings can put it back on WebM."
+      : ".") +
+    " Everything that had been written to disk is here.";
+  el("crashNote").hidden = false;
+  try {
+    await saveBlob(blob, filename, 10 * 60 * 1000);
+    el("savedLine").textContent = "Recovered and saved to Downloads ✓  ·  " + filename + "  ·  " + mb(blob.size);
+  } catch (_) {
+    el("savedLine").textContent = "Recovered " + mb(blob.size) + " — press Save again to keep it";
+  }
+  await mark({ state: "saved", filename, bytes: blob.size });
+  return true;
 }
 
 /* ------------------------------- the tab, and the badge ------------------------------- */
@@ -438,10 +611,12 @@ function fpcBeforeReload() {
 
 /* ------------------------------- wiring ------------------------------- */
 function resetToIdle() {
-  if (previewUrl) { try { URL.revokeObjectURL(previewUrl); } catch (_) {} previewUrl = null; }
-  el("preview").removeAttribute("src");
+  dropPreview();
+  if (diskName) { storeDrop(diskName); diskName = ""; }
+  forget();
   blob = null; filename = ""; lastLink = ""; bytes = 0;
   el("savedLine").textContent = "Saved to Downloads ✓";
+  el("crashNote").hidden = true;
   setState("idle");
   note("");
 }
@@ -482,6 +657,8 @@ async function init() {
     e.returnValue = "";
     return "";
   });
+
+  await checkRecovery();
 
   if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia || typeof MediaRecorder !== "function") {
     el("start").disabled = true;

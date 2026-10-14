@@ -84,11 +84,17 @@ async function getSettings() {
 // paths - so a screenshot taken while a recording runs would quietly wipe REC. Guard the setter
 // once instead of editing those thirteen.
 let recLive = false;                       // a recorder tab is recording right now
+// The recorder says "still going" every ten seconds. A tab that CRASHES is never closed, so
+// tabs.onRemoved never fires for it and REC would sit on the toolbar for ever; a heartbeat that
+// stopped is the only honest sign that there is nothing recording any more.
+let recAt = 0;
+const REC_STALE_MS = 35000;
+const recFresh = () => recLive && Date.now() - recAt < REC_STALE_MS;
 const REC_TEXT = "REC";
 const REC_COLOR = "#dc2626";
 
 function setBadge(text, color) {
-  if (!text && recLive) { text = REC_TEXT; color = REC_COLOR; }   // a capture must not outrank it
+  if (!text && recFresh()) { text = REC_TEXT; color = REC_COLOR; }   // a capture must not outrank it
   try {
     chrome.action.setBadgeBackgroundColor({ color: color || "#0d9488" });
     chrome.action.setBadgeText({ text: text || "" });
@@ -99,6 +105,7 @@ function setBadge(text, color) {
 // worker is killed whenever Chrome feels like it, and the recording carries on without it.
 async function setRecording(on, tabId) {
   recLive = !!on;
+  recAt = Date.now();
   try {
     if (recLive) await chrome.storage.session.set({ recTab: tabId == null ? -1 : tabId });
     else await chrome.storage.session.remove("recTab");
@@ -111,6 +118,8 @@ async function recordingTab() {
     const s = await chrome.storage.session.get("recTab");
     const id = s && s.recTab;
     if (id == null || id < 0) return null;
+    // A crashed tab still exists, so its presence proves nothing - the heartbeat does.
+    if (recLive && !recFresh()) { await setRecording(false); return null; }
     return await chrome.tabs.get(id).catch(() => null);
   } catch (_) { return null; }
 }
@@ -122,7 +131,9 @@ async function sweepRecording() {
   try { stored = (await chrome.storage.session.get("recTab")).recTab; } catch (_) { return; }
   if (stored == null) return;
   const tab = await recordingTab();
-  if (tab) { recLive = true; setBadge(REC_TEXT, REC_COLOR); }
+  // After a restart there is no heartbeat yet: take the stored state at its word, and let the
+  // next ten seconds either confirm it or let it go stale.
+  if (tab) { recLive = true; recAt = Date.now(); setBadge(REC_TEXT, REC_COLOR); }
   else await setRecording(false);
 }
 sweepRecording();

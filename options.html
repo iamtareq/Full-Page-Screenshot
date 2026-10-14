@@ -389,6 +389,18 @@
         <span class="switch"><input type="checkbox" id="recMic" /><span class="slider"></span></span>
       </div>
     </div>
+    <div class="row">
+      <div>
+        <label class="rlabel" for="recFormat">Video format</label>
+        <div class="rdesc"><b>WebM</b> is what Chrome has recorded reliably for a decade; it plays in Chrome, Drive and VLC. <b>MP4</b> is the one to pick when the file has to go into Teams or WhatsApp &mdash; but Chrome's MP4 recorder is newer, and on some PCs it has <b>crashed the recording tab</b> (an &ldquo;Aw, Snap!&rdquo;). Either way the recording is written to disk as it is made, so a crash costs a second, not the file.</div>
+      </div>
+      <div class="ctrl">
+        <select id="recFormat">
+          <option value="webm">WebM (safer)</option>
+          <option value="mp4">MP4</option>
+        </select>
+      </div>
+    </div>
     <div class="row" style="grid-template-columns: 1fr">
       <div>
         <div class="rdesc" id="recSound" style="margin-top: 0"></div>
