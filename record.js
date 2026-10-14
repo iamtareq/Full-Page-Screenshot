@@ -480,6 +480,7 @@ async function startRecorder() {
   dropPreview();
   blob = null;
   el("crashNote").hidden = true;
+  el("crashBack").hidden = true;
   writeQueue = Promise.resolve();
   diskName = "rec-" + Date.now().toString(36) + (/mp4/.test(mime) ? ".mp4" : ".webm");
   try {
@@ -763,12 +764,23 @@ async function checkRecovery() {
   fillName();
   showPreview();
   setState("stopped");
+  // The same PC, the same Chrome, the same MP4 muxer: it will do it again. The recording is safe
+  // either way, but the tab is not, so the format goes back to the one that cannot crash - and
+  // anyone who wants to keep trying MP4 is one press away from it.
+  let movedOff = false;
+  if (r.format === "mp4" && cfg.format === "mp4") {
+    cfg.format = "webm";
+    reflectSettings();
+    await saveSetting("recFormat", "webm");
+    movedOff = true;
+  }
   el("crashNote").textContent = "This tab closed or crashed while it was recording" +
     (r.format === "mp4"
-      ? " — Chrome's MP4 recorder is known to crash on some PCs. Settings can put it back on WebM."
+      ? " — Chrome's MP4 recorder does this on some PCs" + (movedOff ? ", so recording is back on WebM." : ".")
       : ".") +
     " Everything that had been written to disk is here.";
   el("crashNote").hidden = false;
+  el("crashBack").hidden = !movedOff;
   try {
     lastDownloadId = await saveBlob(blob, filename, 10 * 60 * 1000);
     el("savedLine").textContent = "Recovered and saved to Downloads ✓  ·  " + filename + "  ·  " + mb(blob.size);
@@ -893,6 +905,7 @@ function resetToIdle() {
   el("nameBox").value = "";
   el("savedLine").textContent = "Saved to Downloads ✓";
   el("crashNote").hidden = true;
+  el("crashBack").hidden = true;
   setState("idle");
   note("");
 }
@@ -913,6 +926,11 @@ async function init() {
   el("micSkip").addEventListener("click", onMicSkip);
   el("stop").addEventListener("click", requestStop);
   el("countCancel").addEventListener("click", cancelCountdown);
+  el("keepMp4").addEventListener("click", async () => {
+    await setFormat("mp4");
+    el("crashBack").hidden = true;
+    toast("Back on MP4 — the recording still survives a crash, the tab does not");
+  });
   el("countSkip").addEventListener("click", skipCountdown);
   el("again").addEventListener("click", () => { if (state !== "uploading") resetToIdle(); });
   const nameBox = el("nameBox");
