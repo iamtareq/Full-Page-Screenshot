@@ -52,6 +52,58 @@ function setState(s) {
   document.body.dataset.state = s;
 }
 
+// The tab you left behind is the one you have to find again. Its title carries the clock, and
+// its icon turns into a red dot, so a strip of fifteen tabs still shows which one is recording.
+const PAGE_TITLE = "Screen recording \u2014 Full Page Capture";
+let favWas = null;
+
+function setTitle(ms) {
+  document.title = ms == null ? PAGE_TITLE : "\u25cf " + mmss(ms) + " \u00b7 recording";
+}
+
+function setFavicon(on) {
+  const link = el("fav");
+  if (!link) return;
+  if (!on) { if (favWas) link.href = favWas; return; }
+  if (!favWas) favWas = link.getAttribute("href") || "icons/icon32.png";
+  try {
+    const c = document.createElement("canvas");
+    c.width = 32; c.height = 32;
+    const x = c.getContext("2d");
+    x.fillStyle = "#dc2626";
+    x.beginPath(); x.arc(16, 16, 13, 0, Math.PI * 2); x.fill();
+    link.href = c.toDataURL("image/png");
+  } catch (_) {}
+}
+
+/* ---- conditions: things that stay true for the whole recording ----
+ * A toast fades after four seconds, usually while you are looking at the tab you are recording.
+ * A silent microphone or a window with no sound is worth a line that stays. */
+const conds = new Map();
+
+function renderConds() {
+  const box = el("conds");
+  if (!box) return;
+  const rows = [];
+  conds.forEach((c) => {
+    const d = document.createElement("div");
+    d.className = "cond" + (c.warn ? " warn" : "");
+    d.textContent = c.text;
+    rows.push(d);
+  });
+  box.replaceChildren.apply(box, rows);
+}
+
+function cond(key, text, warn) {
+  conds.set(key, { text, warn: !!warn });
+  renderConds();
+}
+
+function clearConds() {
+  conds.clear();
+  renderConds();
+}
+
 let toastTimer = null;
 function toast(msg) {
   const t = el("toast");
@@ -74,12 +126,62 @@ async function loadSettings() {
   cfg.sys = s.recSystemAudio !== false;      // default on
   cfg.mic = s.recMic === true;               // default off
   cfg.format = s.recFormat === "mp4" ? "mp4" : "webm";   // WebM unless asked otherwise: see pickMime
-  const sys = el("chipSys"), mic = el("chipMic"), fmt = el("chipFmt");
-  sys.dataset.on = cfg.sys ? "1" : "0";
-  mic.dataset.on = cfg.mic ? "1" : "0";
-  sys.textContent = cfg.sys ? "Computer sound: on" : "Computer sound: off";
-  mic.textContent = cfg.mic ? "Microphone: on" : "Microphone: off";
-  if (fmt) { fmt.dataset.on = "1"; fmt.textContent = cfg.format === "mp4" ? "Saves as MP4" : "Saves as WebM"; }
+  reflectSettings();
+}
+
+function reflectSettings() {
+  const sys = el("togSys"), mic = el("togMic"), warn = el("fmtWarn");
+  if (sys) sys.setAttribute("aria-pressed", cfg.sys ? "true" : "false");
+  if (mic) mic.setAttribute("aria-pressed", cfg.mic ? "true" : "false");
+  [["fmtWebm", "webm"], ["fmtMp4", "mp4"]].forEach(([id, fmt]) => {
+    const b = el(id);
+    if (b) b.setAttribute("aria-pressed", cfg.format === fmt ? "true" : "false");
+  });
+  // The MP4 warning belongs where MP4 is chosen, not three clicks away in Settings.
+  if (warn) warn.hidden = cfg.format !== "mp4";
+}
+
+// These switches read from Settings, so they write back to the same place - one object, merged,
+// because options.js rebuilds the whole thing from its form when it saves.
+// One at a time, in order. Each write is a read-modify-write of the SAME settings object, so two
+// switches pressed a moment apart both read the old object and the second drops the first - which
+// is exactly what happened the first time two were pressed together in a real browser.
+let settingsQueue = Promise.resolve();
+
+function saveSetting(key, value) {
+  settingsQueue = settingsQueue.then(async () => {
+    const got = await chrome.storage.sync.get("settings");
+    const next = Object.assign({}, (got && got.settings) || {});
+    next[key] = value;
+    await chrome.storage.sync.set({ settings: next });
+  }).catch(() => {
+    toast("That switch could not be saved \u2014 Settings still works");
+  });
+  return settingsQueue;
+}
+
+// Pressing one takes effect on the NEXT recording, with no reload: cfg is what startRecorder reads.
+async function setSound(which, on) {
+  if (which === "mic") {
+    cfg.mic = on;
+    await saveSetting("recMic", on);
+    if (on) {
+      const perm = await micPermission();
+      if (perm === "denied") note("Chrome is blocking the microphone for this page. Unblock it in Chrome's site settings, or turn this back off.");
+      else if (perm === "prompt") note("Chrome will ask to use the microphone when you press Start.");
+      else note("");
+    } else note("");
+  } else {
+    cfg.sys = on;
+    await saveSetting("recSystemAudio", on);
+  }
+  reflectSettings();
+}
+
+async function setFormat(fmt) {
+  cfg.format = fmt === "mp4" ? "mp4" : "webm";
+  reflectSettings();
+  await saveSetting("recFormat", cfg.format);
 }
 
 // "off" when the switch is off, otherwise what Chrome says about this page's permission.
@@ -99,9 +201,12 @@ async function onStart() {
   note("");
   // Only a quick permission read before the picker: an await of the microphone PROMPT would
   // outlive the click that getDisplayMedia needs, which is why that lives on its own screen.
+  clearConds();                         // a fresh attempt, so last time's news goes
   const perm = await micPermission();
   if (perm === "prompt") { setState("micAsk"); return; }
-  if (perm === "denied") toast("Chrome is blocking the microphone for this page — recording without a voice");
+  if (perm === "denied") {
+    cond("mic", "Chrome is blocking the microphone for this page, so this recording has no voice.", true);
+  }
   await begin(perm === "granted");
 }
 
@@ -118,9 +223,8 @@ async function onMicAllow() {
 }
 
 function onMicSkip() {
-  cfg.mic = false;
-  el("chipMic").dataset.on = "0";
-  el("chipMic").textContent = "Microphone: off";
+  cfg.mic = false;                      // this recording only; the switch in Settings is untouched
+  reflectSettings();
   setState("idle");
   begin(false);
 }
@@ -132,7 +236,7 @@ async function begin(withMic) {
     try {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (_) {
-      toast("The microphone could not be opened — recording without it");
+      cond("mic", "The microphone could not be opened, so this recording has no voice.", true);
     }
   }
   try {
@@ -171,9 +275,12 @@ function buildAudio() {
       return { tracks: [sys[0]], words: "computer sound (the two could not be blended)" };
     }
   }
-  if (sys.length) return { tracks: [sys[0]], words: "computer sound" };
-  if (mic.length) return { tracks: [mic[0]], words: "microphone" };
-  return { tracks: [], words: cfg.sys ? "none — this surface offers no sound" : "none" };
+  // sysMissing: the computer's sound was asked for and Chrome did not hand any over, which is
+  // what happens for a single window. Worth saying out loud rather than leaving to be noticed.
+  const sysMissing = cfg.sys && sys.length === 0;
+  if (sys.length) return { tracks: [sys[0]], words: "computer sound", sysMissing: false };
+  if (mic.length) return { tracks: [mic[0]], words: "microphone", sysMissing };
+  return { tracks: [], words: cfg.sys ? "none — this surface offers no sound" : "none", sysMissing };
 }
 
 // WebM first, and deliberately. On 2026-10-14 Chrome 155's MP4 muxer killed this page's renderer
@@ -314,7 +421,7 @@ async function startRecorder() {
     await storeOpen(diskName);
   } catch (_) {
     store = null; diskName = "";
-    toast("This recording is being held in the tab, not on disk \u2014 don't close the tab");
+    cond("disk", "Held in this tab, not on disk. If the tab closes, this recording goes with it.", true);
   }
 
   memChunks = []; bytes = 0; stopping = false; warned = false;
@@ -342,10 +449,15 @@ async function startRecorder() {
   el("factSurface").textContent = (SURFACE_WORDS[s.displaySurface] || "your screen") +
     (s.width && s.height ? " · " + s.width + "×" + s.height : "");
   el("factAudio").textContent = audio.words;
+  // Chrome offers the computer's sound for a whole screen or a tab, never for a single window.
+  if (audio.sysMissing) {
+    cond("sys", "This surface offers no computer sound — Chrome only shares it for a whole screen or a tab.");
+  }
   el("factFormat").textContent = (/mp4/.test(rec.mimeType || "") ? "MP4" : "WebM") +
     " · " + (rec.mimeType || "Chrome's default").replace(/;.*$/, "");
   el("bigWarn").hidden = true;
   setState("recording");
+  setFavicon(true);
   onTick();
   ticker = setInterval(onTick, 250);
   announce(true);
@@ -367,6 +479,7 @@ const mb = (n) => (n / 1048576).toFixed(1) + " MB";
 function onTick() {
   const ms = Date.now() - startedAt;
   el("clock").textContent = mmss(ms);
+  setTitle(ms);
   el("size").textContent = mb(bytes);
   if (!warned && bytes >= WARN_BYTES) {
     warned = true;
@@ -397,6 +510,8 @@ async function finish() {
   stopEverything();
   announce(false);
   holdTab(false);
+  setTitle(null);
+  setFavicon(false);
 
   await storeClose();
   const type = mime.replace(/;.*$/, "");
@@ -611,6 +726,8 @@ function fpcBeforeReload() {
 
 /* ------------------------------- wiring ------------------------------- */
 function resetToIdle() {
+  clearConds();
+  setTitle(null);
   dropPreview();
   if (diskName) { storeDrop(diskName); diskName = ""; }
   forget();
@@ -629,6 +746,10 @@ async function init() {
   await loadSettings();
 
   el("start").addEventListener("click", onStart);
+  el("togSys").addEventListener("click", () => setSound("sys", !cfg.sys));
+  el("togMic").addEventListener("click", () => setSound("mic", !cfg.mic));
+  el("fmtWebm").addEventListener("click", () => setFormat("webm"));
+  el("fmtMp4").addEventListener("click", () => setFormat("mp4"));
   el("micAllow").addEventListener("click", onMicAllow);
   el("micSkip").addEventListener("click", onMicSkip);
   el("stop").addEventListener("click", requestStop);
