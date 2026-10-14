@@ -1,4 +1,4 @@
 {
-  "version": "1.5.5",
-  "notes": "Fix and an option. The pasted “Click Me” can now carry the font size too (a paste that says nothing about it gets the sheet's 10pt, even in a 12pt row) - put your row's size in Settings, or leave it empty to say nothing. And a second way out of the whole argument: 'Or paste it as a formula' copies =HYPERLINK(...) instead of formatted text, so the cell keeps its own size, font, colour and alignment. A plain box then gets the formula text instead of the URL, so it is off by default."
+  "version": "1.6.0",
+  "notes": "Big uploads. A multi-page PDF (or anything over 5 MB) now goes to Drive in chunks instead of one request Google can refuse, and the button counts the upload up in percent instead of sitting on “Uploading…”. A connection that drops, or a sign-in that goes stale half-way, now carries on from where the upload really got to rather than starting again. Nothing changes for an ordinary screenshot: that is still the same single request it always was."
 }

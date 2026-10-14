@@ -111,6 +111,237 @@ function drivePost(token, filename, folderId, blob, mime) {
   });
 }
 
+/* ------------------- Resumable upload: anything bigger than 5 MB ------------------- */
+// drivePost above is one request, and Google documents uploadType=multipart for files of 5 MB or
+// less. A screenshot never comes close; a long-page PDF can pass it, and a screen recording passes
+// it in about sixteen seconds. So anything bigger goes up the resumable way: open a session once,
+// then send the bytes in chunks that can be retried, resumed from where the server really got to,
+// or cancelled.
+const DRIVE_SIMPLE_MAX = 5 * 1024 * 1024;
+// Every chunk but the last must be a multiple of 256 KiB. 8 MiB is a compromise: large enough that
+// a 300 MB recording is ~40 requests, small enough that a dropped connection costs little.
+const DRIVE_CHUNK = 8 * 1024 * 1024;
+// How long to wait after the 1st, 2nd, 3rd... failure of one chunk. A let, so a test does not have
+// to sleep fifteen real seconds to prove the backoff happens.
+let DRIVE_BACKOFF = [1000, 2000, 4000, 8000];
+// Up to three stale tokens in one upload: an hour-long upload can genuinely outlive two.
+const DRIVE_MAX_REFRESH = 3;
+const driveWait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function driveAbortError() {
+  const e = new Error("UPLOAD_CANCELLED");
+  e.name = "AbortError";     // what the rest of the web calls a cancelled request
+  return e;
+}
+
+// XMLHttpRequest, not fetch, and only on this path. Three things it needs that fetch cannot give:
+// the session URI arrives in a response HEADER (Location), not in the body; a long upload has to
+// say how far the REQUEST body has got, which fetch never reports; and Cancel has to stop bytes
+// already in flight. An extension page may use XHR freely (a service worker may not - nothing
+// here runs in one), and host_permissions means these responses are not CORS-filtered, so every
+// header is readable.
+function driveSend(o) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(o.method, o.url, true);
+    const h = o.headers || {};
+    Object.keys(h).forEach((k) => { if (h[k] != null) xhr.setRequestHeader(k, h[k]); });
+    if (o.onProgress && xhr.upload) {
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable) o.onProgress(e.loaded, e.total); };
+    }
+    const sig = o.signal;
+    const kill = () => xhr.abort();
+    const off = () => { if (sig) sig.removeEventListener("abort", kill); };
+    if (sig) {
+      if (sig.aborted) { reject(driveAbortError()); return; }
+      sig.addEventListener("abort", kill);
+    }
+    xhr.onload = () => {
+      off();
+      resolve({
+        status: xhr.status,
+        text: xhr.responseText || "",
+        header: (n) => xhr.getResponseHeader(n),
+        json() { try { return JSON.parse(this.text); } catch (_) { return null; } }
+      });
+    };
+    // No status at all: offline, DNS, or the connection dropped. Told apart from an HTTP error
+    // because it is the one case where the server may still have kept part of the chunk.
+    xhr.onerror = () => { off(); reject(new Error("NETWORK")); };
+    xhr.ontimeout = () => { off(); reject(new Error("NETWORK")); };
+    xhr.onabort = () => { off(); reject(driveAbortError()); };
+    xhr.send(o.body === undefined ? null : o.body);
+  });
+}
+
+// A token that went stale mid-upload: drop the cached one and let getDriveToken fetch another,
+// silently in the ordinary case. The session URI itself does not depend on the token.
+async function driveRefreshToken() {
+  try { await chrome.storage.session.remove("driveToken"); } catch (_) {}
+  return getDriveToken();
+}
+
+// Open a session. The reply carries no file: its only payload is the Location header, the URI the
+// chunks go to. That URI lives about a week and is independent of the token.
+function driveSession(token, filename, folderId, blob, mime, signal) {
+  const meta = { name: filename };
+  if (folderId) meta.parents = [folderId];
+  return driveSend({
+    method: "POST",
+    url: "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,webViewLink",
+    headers: {
+      Authorization: "Bearer " + token,
+      "Content-Type": "application/json; charset=UTF-8",
+      "X-Upload-Content-Type": mime,
+      "X-Upload-Content-Length": String(blob.size)
+    },
+    body: JSON.stringify(meta),
+    signal
+  });
+}
+
+// Ask the server how much it actually holds. Used after anything goes wrong, because our own
+// count of what we sent is a guess: a chunk can be half received.
+function driveQuery(uri, total, token, signal) {
+  return driveSend({
+    method: "PUT",
+    url: uri,
+    headers: { Authorization: "Bearer " + token, "Content-Range": "bytes */" + total },
+    signal
+  });
+}
+
+// "bytes=0-262143" -> 262144, where the next chunk starts. A 308 with no Range means the server
+// is holding nothing yet.
+function driveNextFrom(range) {
+  const m = /bytes=(\d+)-(\d+)/.exec(String(range || ""));
+  return m ? parseInt(m[2], 10) + 1 : 0;
+}
+
+// Send the bytes. Every decision about where we are comes from the server's Range header, never
+// from adding up what we believe we sent.
+async function drivePutChunks(uri, blob, token, onProgress, signal) {
+  const total = blob.size;
+  if (!total) throw new Error("EMPTY_FILE");
+  let sent = 0, fails = 0, refreshes = 0;
+  if (onProgress) onProgress(0, total);
+  for (;;) {
+    const end = Math.min(sent + DRIVE_CHUNK, total);
+    const at = sent;                       // onProgress reports absolute bytes, chunks are relative
+    let r = null;
+    try {
+      r = await driveSend({
+        method: "PUT",
+        url: uri,
+        headers: { Authorization: "Bearer " + token,
+                   "Content-Range": "bytes " + sent + "-" + (end - 1) + "/" + total },
+        body: blob.slice(sent, end),
+        onProgress: onProgress && ((loaded) => onProgress(Math.min(at + loaded, total), total)),
+        signal
+      });
+    } catch (e) {
+      if (e && e.name === "AbortError") throw e;
+      r = null;                            // dropped: fall through to the backoff below
+    }
+
+    if (r && (r.status === 200 || r.status === 201)) {
+      const file = r.json();
+      if (!file || !file.id) throw new Error("NO_FILE_ID");
+      if (onProgress) onProgress(total, total);
+      return { file, token };
+    }
+
+    let moved = false;
+    if (r && r.status === 308) {
+      const next = driveNextFrom(r.header("Range"));
+      if (next > sent) { sent = next; fails = 0; moved = true; if (onProgress) onProgress(sent, total); }
+      // A 308 that did not move is a failure to retry, not progress - do not spin on it.
+    }
+    if (moved) continue;
+
+    if (r && r.status === 401 && refreshes < DRIVE_MAX_REFRESH) {
+      refreshes++;
+      token = await driveRefreshToken();
+      continue;                            // the same chunk again, with the new token, no waiting
+    }
+    if (r && r.status === 404) throw new Error("SESSION_GONE");
+    // 400, 403, a second 401...: retrying cannot help.
+    if (r && r.status >= 400 && r.status < 500 && r.status !== 408 && r.status !== 429) {
+      throw new Error("HTTP " + r.status + " " + r.text.slice(0, 120));
+    }
+
+    // 5xx, 429, 408, a dropped connection, or a stuck 308: wait, then ask where the server
+    // really got to before sending another byte.
+    if (fails >= DRIVE_BACKOFF.length) throw new Error("UPLOAD_STALLED");
+    await driveWait(DRIVE_BACKOFF[fails++]);
+    if (signal && signal.aborted) throw driveAbortError();
+    let q = null;
+    try { q = await driveQuery(uri, total, token, signal); } catch (e) {
+      if (e && e.name === "AbortError") throw e;
+    }
+    if (!q) continue;
+    if (q.status === 200 || q.status === 201) {
+      const file = q.json();               // it had finished after all
+      if (file && file.id) { if (onProgress) onProgress(total, total); return { file, token }; }
+      continue;
+    }
+    if (q.status === 404) throw new Error("SESSION_GONE");
+    if (q.status === 401 && refreshes < DRIVE_MAX_REFRESH) { refreshes++; token = await driveRefreshToken(); continue; }
+    if (q.status === 308) {
+      const next = driveNextFrom(q.header("Range"));
+      if (next !== sent) { sent = next; fails = 0; }
+      if (onProgress) onProgress(sent, total);
+    }
+  }
+}
+
+// One door in front of both paths. Returns { file, rootFallback, token } - the token comes back
+// because it may have been refreshed along the way, and the caller still needs a live one to
+// share the file afterwards.
+//   onProgress(sentBytes, totalBytes), signal: an AbortSignal for Cancel.
+async function driveUpload(token, filename, folderId, blob, mime, opts) {
+  opts = opts || {};
+  const onProgress = opts.onProgress, signal = opts.signal;
+  if (signal && signal.aborted) throw driveAbortError();
+
+  // Small: exactly the one request this extension has always made.
+  if (blob.size <= DRIVE_SIMPLE_MAX) {
+    let res = await drivePost(token, filename, folderId, blob, mime);
+    if (res.status === 401) {              // token went stale - refresh once
+      token = await driveRefreshToken();
+      res = await drivePost(token, filename, folderId, blob, mime);
+    }
+    let rootFallback = false;
+    if ((res.status === 404 || res.status === 403) && folderId) {
+      // Folder not writable (wrong id / no access) -> upload to Drive root instead.
+      res = await drivePost(token, filename, "", blob, mime);
+      rootFallback = res.ok;
+    }
+    if (!res.ok) throw new Error("HTTP " + res.status + " " + (await res.text()).slice(0, 120));
+    if (onProgress) onProgress(blob.size, blob.size);
+    return { file: await res.json(), rootFallback, token };
+  }
+
+  // Big. The folder is settled before any bytes move: the session POST is cheap, so a folder we
+  // cannot write to costs one request here instead of a whole upload there.
+  let rootFallback = false;
+  let s = await driveSession(token, filename, folderId, blob, mime, signal);
+  if (s.status === 401) {
+    token = await driveRefreshToken();
+    s = await driveSession(token, filename, folderId, blob, mime, signal);
+  }
+  if ((s.status === 404 || s.status === 403) && folderId) {
+    s = await driveSession(token, filename, "", blob, mime, signal);
+    rootFallback = s.status >= 200 && s.status < 300;
+  }
+  if (s.status < 200 || s.status >= 300) throw new Error("HTTP " + s.status + " " + s.text.slice(0, 120));
+  const uri = s.header("Location");
+  if (!uri) throw new Error("NO_SESSION_URI");
+
+  const done = await drivePutChunks(uri, blob, token, onProgress, signal);
+  return { file: done.file, rootFallback, token: done.token };
+}
+
 function notifyDrive(title, message, id) {
   try {
     if (chrome.notifications && chrome.notifications.create) {

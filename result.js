@@ -4230,20 +4230,22 @@ async function uploadToDrive() {
     const { blob, ext, mime } = await driveExportBlob();
     const filename = driveFilename(ext);
 
-    let res = await drivePost(token, filename, folderId, blob, mime);
-    if (res.status === 401) { // token went stale — refresh once
-      await chrome.storage.session.remove("driveToken").catch(() => {});
-      token = await getDriveToken();
-      res = await drivePost(token, filename, folderId, blob, mime);
-    }
-    let rootFallback = false;
-    if ((res.status === 404 || res.status === 403) && folderId) {
-      // Folder not writable (wrong id / no access) → upload to Drive root instead.
-      res = await drivePost(token, filename, "", blob, mime);
-      rootFallback = res.ok;
-    }
-    if (!res.ok) throw new Error("HTTP " + res.status + " " + (await res.text()).slice(0, 120));
-    const file = await res.json();
+    // One door, two paths (drive.js): a screenshot still goes up in the single request it always
+    // did, while anything past Google's 5 MB multipart limit — a long-page PDF — goes up in
+    // chunks. Only the chunked path can say how far it has got, and only it needs to: a small
+    // upload is over before a percentage would be read.
+    let shownPct = -1;
+    const onProgress = (done, total) => {
+      if (!label || total <= DRIVE_SIMPLE_MAX) return;
+      const pct = Math.floor((done / total) * 100);
+      if (pct === shownPct) return;
+      shownPct = pct;
+      label.textContent = "Uploading… " + pct + "%";
+    };
+    const up = await driveUpload(token, filename, folderId, blob, mime, { onProgress });
+    token = up.token;                 // may have been refreshed part-way through a long upload
+    const file = up.file;
+    const rootFallback = up.rootFallback;
 
     // Optionally widen sharing to anyone-with-the-link (off by default for privacy).
     let sharedPublic = false;
@@ -4282,6 +4284,8 @@ async function uploadToDrive() {
     if (m === "NO_CLIENT") msg = "First set up Google Drive in Settings ⚙";
     else if (/CANCELLED/.test(m)) msg = "Drive sign-in cancelled";
     else if (/too large/.test(m)) msg = "Image too large to upload";
+    else if (m === "UPLOAD_STALLED") msg = "Upload stopped — the connection kept dropping. Try again.";
+    else if (m === "SESSION_GONE" || m === "NO_SESSION_URI") msg = "Drive dropped the upload — try again";
     else msg = "Drive upload failed: " + m.slice(0, 90);
     toast(msg);
     if (!/CANCELLED|NO_CLIENT/.test(m)) notifyDrive("Drive upload failed", msg);
