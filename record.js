@@ -14,6 +14,8 @@ const el = (id) => document.getElementById(id);
 /* ------------------------------- state ------------------------------- */
 let state = "idle";          // idle · micAsk · picking · counting · recording · stopped · uploading · uploaded
 let myTabId = null;
+let myWindowId = null;
+let focusOnStop = true;      // false only when the stop was not the person's own doing
 let cfg = { sys: true, mic: false, format: "webm", countdown: true, float: true };
 
 let display = null;          // the stream Chrome's picker handed over
@@ -654,6 +656,10 @@ async function finish() {
   lastDownloadId = null;
   reflectKept();
   mark({ state: "unsaved", filename, bytes: blob.size });
+  // The recording is ready and nothing has been decided about it yet, so this is the moment the
+  // tab is worth looking at.
+  if (focusOnStop) showMe();
+  focusOnStop = true;
   if (stopWaiter) { const r = stopWaiter; stopWaiter = null; r(); }
 }
 
@@ -942,6 +948,21 @@ function announce(on) {
   try { chrome.runtime.sendMessage({ type: "rec", on: !!on }); } catch (_) {}
 }
 
+// Stop is pressed from the floating timer, or from Chrome's own sharing bar, while the person is
+// looking at something else entirely - and what happens next (send it to Drive, save it, name it)
+// is on THIS tab. So bring it forward. Neither call needs a permission; the editor and the popup
+// both already do exactly this.
+async function showMe() {
+  if (myTabId == null) return;
+  try {
+    const t = await chrome.tabs.update(myTabId, { active: true });
+    const win = (t && t.windowId) != null ? t.windowId : myWindowId;
+    if (win != null && chrome.windows && chrome.windows.update) {
+      await chrome.windows.update(win, { focused: true });
+    }
+  } catch (_) {}
+}
+
 // A background tab can be discarded by Chrome to save memory, which would take the recording
 // with it. The editor does the same while a capture is in flight.
 function holdTab(on) {
@@ -1037,6 +1058,7 @@ function fpcBeforeReload() {
   if (state !== "recording") return Promise.resolve();
   return new Promise((resolve) => {
     stopWaiter = resolve;
+    focusOnStop = false;          // the person is in the popup pressing Update, not here
     requestStop();
     setTimeout(resolve, 20000);           // never hold the popup for ever
   });
@@ -1062,7 +1084,11 @@ async function init() {
   // record.html ships data-state="idle" so the first paint is not a flash of every section at
   // once; this makes the script the one place the state actually lives.
   setState("idle");
-  try { const t = await chrome.tabs.getCurrent(); myTabId = t && t.id; } catch (_) {}
+  try {
+    const t = await chrome.tabs.getCurrent();
+    myTabId = t && t.id;
+    myWindowId = t && t.windowId;
+  } catch (_) {}
   await loadSettings();
 
   el("start").addEventListener("click", onStart);
