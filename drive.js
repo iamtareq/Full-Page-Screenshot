@@ -94,7 +94,8 @@ async function getDriveToken() {
   return res.token;
 }
 
-function drivePost(token, filename, folderId, blob, mime) {
+// signal is optional, and only the uploader passes it: the editor's own calls are unchanged.
+function drivePost(token, filename, folderId, blob, mime, signal) {
   const boundary = "fpc" + Math.random().toString(16).slice(2) + Date.now().toString(16); // all lowercase
   const metadata = { name: filename };
   if (folderId) metadata.parents = [folderId];
@@ -108,7 +109,8 @@ function drivePost(token, filename, folderId, blob, mime) {
   return fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink", {
     method: "POST",
     headers: { Authorization: "Bearer " + token, "Content-Type": "multipart/related; boundary=" + boundary },
-    body
+    body,
+    signal
   });
 }
 
@@ -305,17 +307,26 @@ async function driveUpload(token, filename, folderId, blob, mime, opts) {
   const onProgress = opts.onProgress, signal = opts.signal;
   if (signal && signal.aborted) throw driveAbortError();
 
-  // Small: exactly the one request this extension has always made.
+  // Small: exactly the one request this extension has always made - now with Cancel reaching it.
   if (blob.size <= DRIVE_SIMPLE_MAX) {
-    let res = await drivePost(token, filename, folderId, blob, mime);
+    const post = async (folder) => {
+      try {
+        return await drivePost(token, filename, folder, blob, mime, signal);
+      } catch (e) {
+        // fetch rejects with its own AbortError; the caller is told the one word it knows.
+        if (e && e.name === "AbortError") throw driveAbortError();
+        throw e;
+      }
+    };
+    let res = await post(folderId);
     if (res.status === 401) {              // token went stale - refresh once
       token = await driveRefreshToken();
-      res = await drivePost(token, filename, folderId, blob, mime);
+      res = await post(folderId);
     }
     let rootFallback = false;
     if ((res.status === 404 || res.status === 403) && folderId) {
       // Folder not writable (wrong id / no access) -> upload to Drive root instead.
-      res = await drivePost(token, filename, "", blob, mime);
+      res = await post("");
       rootFallback = res.ok;
     }
     if (!res.ok) throw new Error("HTTP " + res.status + " " + (await res.text()).slice(0, 120));

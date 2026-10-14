@@ -271,6 +271,11 @@ async function begin(withMic) {
          : "Could not start: " + ((e && e.message) || name || "unknown error"));
     return;
   }
+  // Chrome's own "Stop sharing" bar can be pressed during the count, not only while recording -
+  // so this is listened for the moment the track exists, not when the recorder starts.
+  const shared = display.getVideoTracks()[0];
+  if (shared) shared.addEventListener("ended", onShareEnded);
+
   // Three seconds to get back to what you are recording, unless this person has turned it off.
   if (cfg.countdown) beginCountdown();
   else await startRecorder();
@@ -293,11 +298,17 @@ function beginCountdown() {
   }, 1000);
 }
 
-function cancelCountdown() {
+// Sharing ended from Chrome's own bar. What that means depends on how far along we are.
+function onShareEnded() {
+  if (state === "counting") cancelCountdown("Sharing stopped — nothing was recorded");
+  else if (state === "recording") requestStop();
+}
+
+function cancelCountdown(why) {
   clearInterval(countTimer); countTimer = null;
   stopEverything();                     // Chrome stops sharing: nothing was recorded, nothing kept
   setState("idle");
-  toast("Cancelled — nothing was recorded");
+  toast(why || "Cancelled — nothing was recorded");
 }
 
 // For the person who records twenty a day: turn it off by pressing the thing in front of them.
@@ -310,6 +321,22 @@ function skipCountdown() {
 
 // Chrome's muxer writes ONE audio track. With both sources on they have to be blended, or the
 // file silently carries whichever track happened to come first.
+// Wake the audio graph, and say so if it will not wake: silence that nobody explains is exactly
+// what this page exists to prevent.
+function wakeAudio() {
+  const ctx = audioCtx;
+  if (!ctx || !ctx.resume) return;
+  Promise.resolve(ctx.resume()).then(() => {
+    if (audioCtx === ctx && ctx.state === "suspended") {
+      cond("audio", "The browser is holding this page's audio asleep, so the recording may have no sound.", true);
+    }
+  }).catch(() => {
+    if (audioCtx === ctx) {
+      cond("audio", "This page's audio could not be started, so the recording may have no sound.", true);
+    }
+  });
+}
+
 // An analyser on a source track, in a graph that is actually being pulled: an analyser hanging off
 // nothing is never asked for data, so it would report a flat line whatever the microphone is doing.
 function meterFor(ctx, track) {
@@ -321,7 +348,10 @@ function meterFor(ctx, track) {
   const silent = ctx.createGain();
   silent.gain.value = 0;                // nothing comes out of the speakers: this is only a tap
   an.connect(silent).connect(ctx.destination);
-  return { an, data: new Uint8Array(an.fftSize), seen: false };
+  // src and silent are returned, not dropped on the floor. A source node with no reference from
+  // script has been collected mid-recording in Chrome before now, and the symptom is the worst
+  // kind: the sound simply stops, minutes in, with nothing to show for it.
+  return { an, src, silent, data: new Uint8Array(an.fftSize), seen: false };
 }
 
 function buildAudio() {
@@ -329,6 +359,10 @@ function buildAudio() {
   const mic = micStream ? micStream.getAudioTracks() : [];
   if (sys.length || mic.length) {
     try { audioCtx = new AudioContext(); } catch (_) { audioCtx = null; }
+    // A context made without a fresh click starts suspended, and the picker and the three-second
+    // count have long since spent ours. A suspended context processes nothing at all: the blended
+    // track would be silent and the meters would sit flat, both looking like a muted microphone.
+    if (audioCtx && audioCtx.state === "suspended") wakeAudio();
     if (audioCtx) {
       meters = {};
       if (sys.length) meters.sys = meterFor(audioCtx, sys[0]);
@@ -340,10 +374,14 @@ function buildAudio() {
       const ctx = audioCtx || new AudioContext();
       audioCtx = ctx;
       const dest = ctx.createMediaStreamDestination();
-      [sys[0], mic[0]].forEach((track) => {
-        ctx.createMediaStreamSource(new MediaStream([track])).connect(dest);
+      // Held for the same reason the meter's nodes are: an unreferenced source node has been
+      // collected out from under a recording before.
+      const sources = [sys[0], mic[0]].map((track) => {
+        const src = ctx.createMediaStreamSource(new MediaStream([track]));
+        src.connect(dest);
+        return src;
       });
-      mixer = { ctx, dest };
+      mixer = { ctx, dest, sources };
       return { tracks: [dest.stream.getAudioTracks()[0]], words: "computer sound + microphone" };
     } catch (_) {
       return { tracks: [sys[0]], words: "computer sound (the two could not be blended)" };
@@ -468,6 +506,14 @@ async function startRecorder() {
   clearInterval(countTimer); countTimer = null;
   const video = display.getVideoTracks()[0];
   if (!video) { stopEverything(); setState("idle"); toast("Chrome shared no picture \u2014 nothing to record"); return; }
+  // Sharing may have been stopped while the count ran. Recording a track that has already ended
+  // produces a file with nothing in it.
+  if (video.readyState === "ended") {
+    stopEverything();
+    setState("idle");
+    toast("Sharing stopped before recording began — nothing was recorded");
+    return;
+  }
   const audio = buildAudio();
   const out = new MediaStream([video].concat(audio.tracks));
   const mime = pickMime(audio.tracks.length > 0);
@@ -504,9 +550,6 @@ async function startRecorder() {
   rec.ondataavailable = (e) => { if (e.data && e.data.size) { bytes += e.data.size; storeWrite(e.data); } };
   rec.onstop = finish;
   rec.onerror = () => { toast("The recorder stopped with an error — saving what there is"); requestStop(); };
-  // Chrome's own "Stop sharing" bar ends the track, not the recorder. Without this the recording
-  // would keep running against a dead track and the file would be lost.
-  video.addEventListener("ended", () => requestStop());
 
   try {
     rec.start(TIMESLICE_MS);
@@ -727,7 +770,7 @@ async function commitName() {
       try { chrome.downloads.removeFile(wasId, () => void chrome.runtime.lastError); } catch (_) {}
       try { chrome.downloads.erase({ id: wasId }, () => void chrome.runtime.lastError); } catch (_) {}
     }
-    el("savedLine").textContent = "Saved to Downloads ✓  ·  " + filename + "  ·  " + mb(blob.size);
+    reflectKept();                      // one place decides what that line says
     await mark({ state: "saved", filename, bytes: blob.size });
     toast("Renamed to " + filename);
   } catch (_) {
@@ -1013,7 +1056,9 @@ async function sendToDrive() {
     const m = (e && e.message) || String(e);
     let msg;
     if (m === "NO_CLIENT") msg = "First set up Google Drive in Settings ⚙";
-    else if (m === "UPLOAD_CANCELLED") msg = "Upload cancelled — the file is still in Downloads";
+    else if (m === "UPLOAD_CANCELLED") msg = savedLocally
+      ? "Upload cancelled — the file is still on this PC"
+      : "Upload cancelled — the recording is still here, not sent anywhere";
     else if (/CANCELLED/.test(m)) msg = "Drive sign-in cancelled";
     else if (m === "UPLOAD_STALLED") msg = "Upload stopped — the connection kept dropping. Try again.";
     else if (m === "SESSION_GONE" || m === "NO_SESSION_URI") msg = "Drive dropped the upload — try again";
