@@ -31,6 +31,7 @@ let filename = "";
 let previewUrl = null;
 let lastLink = "";
 let lastSurface = "";        // monitor · window · browser, read while the track is still alive
+let lastDownloadId = null;   // so a rename can take the first file away again
 let driveAbort = null;
 let stopWaiter = null;       // resolved by finish(), for the popup's "Update now"
 let beat = null;             // keeps the toolbar's REC honest if this tab dies
@@ -523,6 +524,7 @@ async function finish() {
   memChunks = [];
   filename = recName(mime);
   lastLink = "";
+  fillName();
   showPreview();
   setState("stopped");
   if (!blob.size) {
@@ -533,7 +535,7 @@ async function finish() {
   // chrome.downloads reads from the object URL while it writes, and a 600 MB file is still
   // writing long after a screenshot would be done: hold the URL for ten minutes, not one.
   try {
-    await saveBlob(blob, filename, 10 * 60 * 1000);
+    lastDownloadId = await saveBlob(blob, filename, 10 * 60 * 1000);
     el("savedLine").textContent = "Saved to Downloads ✓  ·  " + filename + "  ·  " + mb(blob.size);
   } catch (_) {
     el("savedLine").textContent = "Could not save it automatically — press Save again";
@@ -546,6 +548,56 @@ async function finish() {
 function dropPreview() {
   if (previewUrl) { try { URL.revokeObjectURL(previewUrl); } catch (_) {} previewUrl = null; }
   el("preview").removeAttribute("src");
+}
+
+/* ------------------------------- the file's name -------------------------------
+ * The name outlives the recording: it is what Downloads holds, what Drive shows, and what the
+ * checklist's "Click Me" points at six weeks later. So it is editable here, before it goes
+ * anywhere - and editing it after the automatic save renames that file rather than leaving two. */
+const nameParts = (full) => {
+  const i = full.lastIndexOf(".");
+  return i > 0 ? { stem: full.slice(0, i), ext: full.slice(i) } : { stem: full, ext: "" };
+};
+
+function fillName() {
+  const box = el("nameBox"), ext = el("nameExt");
+  if (!box) return;
+  const p = nameParts(filename);
+  box.value = p.stem;
+  if (ext) ext.textContent = p.ext;
+}
+
+// Typing is not enough; this runs when the box is left or Enter is pressed.
+async function commitName() {
+  const box = el("nameBox");
+  if (!box || !blob || !blob.size) return;
+  const p = nameParts(filename);
+  // Whatever is typed is a file name first: the same rules the rest of the extension uses, and
+  // an extension typed by hand is dropped rather than doubled.
+  let stem = sanitize(String(box.value || "").replace(/\.(webm|mp4)$/i, "").trim());
+  if (!stem || stem === "screenshot") stem = p.stem;          // emptied: put the old name back
+  box.value = stem;
+  const next = stem + p.ext;
+  if (next === filename) return;
+
+  const wasId = lastDownloadId;
+  const before = filename;
+  filename = next;
+  try {
+    lastDownloadId = await saveBlob(blob, filename, 10 * 60 * 1000);
+    // One file, not two: the automatically saved one goes now that it has been replaced.
+    if (wasId != null) {
+      try { chrome.downloads.removeFile(wasId, () => void chrome.runtime.lastError); } catch (_) {}
+      try { chrome.downloads.erase({ id: wasId }, () => void chrome.runtime.lastError); } catch (_) {}
+    }
+    el("savedLine").textContent = "Saved to Downloads ✓  ·  " + filename + "  ·  " + mb(blob.size);
+    await mark({ state: "saved", filename, bytes: blob.size });
+    toast("Renamed to " + filename);
+  } catch (_) {
+    filename = before;
+    fillName();
+    toast("Could not rename it — Downloads still has " + before);
+  }
 }
 
 function showPreview() {
@@ -603,6 +655,7 @@ async function checkRecovery() {
   diskName = r.name;
   blob = file;
   filename = r.filename || recName(r.mime || "video/webm");
+  fillName();
   showPreview();
   setState("stopped");
   el("crashNote").textContent = "This tab closed or crashed while it was recording" +
@@ -612,7 +665,7 @@ async function checkRecovery() {
     " Everything that had been written to disk is here.";
   el("crashNote").hidden = false;
   try {
-    await saveBlob(blob, filename, 10 * 60 * 1000);
+    lastDownloadId = await saveBlob(blob, filename, 10 * 60 * 1000);
     el("savedLine").textContent = "Recovered and saved to Downloads ✓  ·  " + filename + "  ·  " + mb(blob.size);
   } catch (_) {
     el("savedLine").textContent = "Recovered " + mb(blob.size) + " — press Save again to keep it";
@@ -731,7 +784,8 @@ function resetToIdle() {
   dropPreview();
   if (diskName) { storeDrop(diskName); diskName = ""; }
   forget();
-  blob = null; filename = ""; lastLink = ""; bytes = 0;
+  blob = null; filename = ""; lastLink = ""; bytes = 0; lastDownloadId = null;
+  el("nameBox").value = "";
   el("savedLine").textContent = "Saved to Downloads ✓";
   el("crashNote").hidden = true;
   setState("idle");
@@ -754,6 +808,24 @@ async function init() {
   el("micSkip").addEventListener("click", onMicSkip);
   el("stop").addEventListener("click", requestStop);
   el("again").addEventListener("click", () => { if (state !== "uploading") resetToIdle(); });
+  const nameBox = el("nameBox");
+  nameBox.addEventListener("change", commitName);
+  nameBox.addEventListener("blur", commitName);
+  nameBox.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); nameBox.blur(); } });
+  // Typing replaces the whole name, and ignoring the field costs nothing.
+  nameBox.addEventListener("focus", () => { try { nameBox.select(); } catch (_) {} });
+
+  // The keyboard, but only while this page has focus - it never reaches the page being recorded.
+  window.addEventListener("keydown", (e) => {
+    if (e.code !== "Space" || e.ctrlKey || e.altKey || e.metaKey) return;
+    const t = e.target;
+    const tag = t && t.tagName ? t.tagName.toLowerCase() : "";
+    if (tag === "input" || tag === "textarea" || tag === "select" || tag === "button" ||
+        tag === "video" || (t && t.isContentEditable)) return;      // let the control have it
+    if (state === "recording") { e.preventDefault(); requestStop(); }
+    else if (state === "idle" || state === "stopped" || state === "uploaded") { e.preventDefault(); onStart(); }
+  });
+
   el("saveAgain").addEventListener("click", async () => {
     if (!blob || !blob.size) return;
     try { await saveBlob(blob, filename, 10 * 60 * 1000); toast("Saved again · " + filename); }

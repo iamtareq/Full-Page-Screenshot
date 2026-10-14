@@ -12,10 +12,13 @@ function pad(n) { return String(n).padStart(2, "0"); }
 
 // holdMs: how long the object URL must stay alive. chrome.downloads keeps reading from it
 // while it writes, and a big file can still be writing long after a screenshot would be done.
+// Returns the download id where Chrome gave one, so a caller that renames the file can take the
+// first one away again instead of leaving two.
 async function saveBlob(blob, filename, holdMs) {
   const url = URL.createObjectURL(blob);
+  let downloadId;
   try {
-    await new Promise((resolve, reject) => {
+    downloadId = await new Promise((resolve, reject) => {
       chrome.downloads.download({ url, filename, saveAs: false }, (id) => {
         if (chrome.runtime.lastError || id === undefined) reject(chrome.runtime.lastError);
         else resolve(id);
@@ -28,4 +31,5 @@ async function saveBlob(blob, filename, holdMs) {
   } finally {
     setTimeout(() => URL.revokeObjectURL(url), holdMs || 60000);
   }
+  return downloadId;
 }

@@ -16,7 +16,8 @@
     <section class="card" data-when="idle">
       <div class="pad stack">
         <button id="start" class="btn primary xl">Start recording</button>
-        <p class="hint">Chrome asks what to share. Nothing records until you press Share.</p>
+        <p class="hint">Chrome asks what to share. Nothing records until you press Share.
+          <span class="kbd">Space</span> works too.</p>
       </div>
       <!-- Switches, not labels: changing your mind used to cost two tabs and a reload. -->
       <div class="foot">
@@ -70,8 +71,8 @@
         <!-- Anything true for the WHOLE recording says so here, where it stays. -->
         <div class="conds" id="conds"></div>
         <button id="stop" class="btn danger big">Stop recording</button>
-        <p class="hint">Chrome’s own <b>“Stop sharing”</b> bar stops it too — the file is kept
-          either way. Closing this tab is the one thing that loses it.</p>
+        <p class="hint">Chrome’s own <b>“Stop sharing”</b> bar stops it too, and you can leave
+          this tab — its title keeps the clock. <span class="kbd">Space</span> stops it from here.</p>
         <p class="note warn" id="bigWarn" hidden></p>
       </div>
     </section>
@@ -80,6 +81,16 @@
     <section class="card" data-when="stopped uploading uploaded">
       <div class="pad">
         <video id="preview" controls playsinline></video>
+        <!-- The name is the part that outlives the recording: it is what the sheet links to. -->
+        <label class="namerow" for="nameBox">
+          <span class="namelab">Name</span>
+          <span class="name">
+            <input id="nameBox" type="text" spellcheck="false" autocomplete="off" />
+            <span class="ext" id="nameExt">.webm</span>
+          </span>
+        </label>
+        <p class="hint" id="nameHint">This is the name in Downloads, in Drive, and behind
+          &ldquo;Click&nbsp;Me&rdquo; in the sheet.</p>
         <p class="done" id="savedLine">Saved to Downloads ✓</p>
         <p class="note warn" id="crashNote" hidden></p>
         <div class="btnrow">
