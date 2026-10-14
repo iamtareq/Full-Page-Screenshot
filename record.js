@@ -14,7 +14,7 @@ const el = (id) => document.getElementById(id);
 /* ------------------------------- state ------------------------------- */
 let state = "idle";          // idle · micAsk · picking · counting · recording · stopped · uploading · uploaded
 let myTabId = null;
-let cfg = { sys: true, mic: false, format: "webm", countdown: true };
+let cfg = { sys: true, mic: false, format: "webm", countdown: true, float: true };
 
 let display = null;          // the stream Chrome's picker handed over
 let micStream = null;
@@ -23,6 +23,10 @@ let audioCtx = null;         // one context for the blend AND the meters
 let meters = null;           // { sys, mic } - an analyser on each source that is being recorded
 let countTimer = null;
 let countLeft = 0;
+let bus = null;              // the floating window, if it is open
+let floatWinId = null;
+let floatPos = null;         // where it was last left, so it opens there again
+let floatOpenedAt = null;    // where WE put it, to tell "left alone" from "moved out of shot"
 let rec = null;
 let bytes = 0;
 let startedAt = 0;
@@ -133,6 +137,7 @@ async function loadSettings() {
   cfg.mic = s.recMic === true;               // default off
   cfg.format = s.recFormat === "mp4" ? "mp4" : "webm";   // WebM unless asked otherwise: see pickMime
   cfg.countdown = s.recCountdown !== false;  // default on: the first ten recordings are worth it
+  cfg.float = s.recFloat !== false;          // the little window that says it is still recording
   reflectSettings();
 }
 
@@ -528,6 +533,7 @@ async function startRecorder() {
   el("bigWarn").hidden = true;
   setState("recording");
   setFavicon(true);
+  openFloat();
   onTick();
   ticker = setInterval(onTick, 250);
   announce(true);
@@ -583,6 +589,7 @@ function pumpMeters(ms) {
 function onTick() {
   const ms = Date.now() - startedAt;
   pumpMeters(ms);
+  postTick();
   el("clock").textContent = mmss(ms);
   setTitle(ms);
   el("size").textContent = mb(bytes);
@@ -631,6 +638,8 @@ async function finish() {
   fillName();
   showPreview();
   setState("stopped");
+  postTick();                           // the floating window hears it is over...
+  closeFloat();                         // ...and is closed either way
   if (!blob.size) {
     el("savedLine").textContent = "Nothing was recorded — try again";
     if (stopWaiter) { const r = stopWaiter; stopWaiter = null; r(); }
@@ -789,6 +798,72 @@ async function checkRecovery() {
   }
   await mark({ state: "saved", filename, bytes: blob.size });
   return true;
+}
+
+/* ------------------------------- the floating window -------------------------------
+ * The thing you are recording is usually not this tab, and Chrome's own sharing bar can be
+ * collapsed out of the way. This is a small window of our own that says the recording is still
+ * running and can stop it - a separate Chrome window, not something injected into the page, so
+ * the extension stays activeTab-only and the page under test is untouched.
+ *
+ * It is on the screen, so for a whole-screen recording it would be IN the video. It opens where
+ * it was last left: drag it onto a second screen once and it stays out of shot for good. */
+const FLOAT_W = 300, FLOAT_H = 212;   // tall enough for the line about being in the video
+
+function postTick() {
+  if (!bus) return;
+  try {
+    bus.postMessage({
+      type: "tick",
+      ms: startedAt ? Date.now() - startedAt : 0,
+      bytes, state,
+      surface: lastSurface,
+      placed: !!(floatPos && floatPos.moved)   // not moved yet = warn that it is in the video
+    });
+  } catch (_) {}
+}
+
+async function openFloat() {
+  if (!cfg.float || floatWinId != null) return;
+  try { floatPos = (await chrome.storage.local.get("recFloatAt")).recFloatAt || null; } catch (_) {}
+  const scr = typeof screen === "object" && screen ? screen : {};
+  const opts = {
+    url: chrome.runtime.getURL("rec-float.html"),
+    type: "popup",
+    width: (floatPos && floatPos.width) || FLOAT_W,
+    height: (floatPos && floatPos.height) || FLOAT_H,
+    focused: false                  // never steal the keyboard from what is being recorded
+  };
+  if (floatPos) {
+    opts.left = floatPos.left;
+    opts.top = floatPos.top;
+  } else {                          // bottom right: the least-in-the-way corner before it is moved
+    opts.left = Math.max(0, (scr.availWidth || 1280) - FLOAT_W - 24);
+    opts.top = Math.max(0, (scr.availHeight || 800) - FLOAT_H - 48);
+  }
+  floatOpenedAt = { left: opts.left, top: opts.top };
+  try {
+    const w = await chrome.windows.create(opts);
+    floatWinId = w && w.id;
+  } catch (_) { floatWinId = null; }
+}
+
+async function closeFloat() {
+  if (floatWinId == null) return;
+  const id = floatWinId;
+  floatWinId = null;
+  try { await chrome.windows.remove(id); } catch (_) {}
+}
+
+async function saveFloatAt(m) {
+  if (!m || typeof m.left !== "number") return;
+  // Closing it where we put it is not the same as moving it: the line about being in the video
+  // stays until it has actually been dragged somewhere else (another screen, usually).
+  const near = floatOpenedAt &&
+    Math.abs(m.left - floatOpenedAt.left) < 40 && Math.abs(m.top - floatOpenedAt.top) < 40;
+  const moved = (floatPos && floatPos.moved) || !near;
+  floatPos = { left: m.left, top: m.top, width: m.width, height: m.height, moved };
+  try { await chrome.storage.local.set({ recFloatAt: floatPos }); } catch (_) {}
 }
 
 /* ------------------------------- the tab, and the badge ------------------------------- */
@@ -976,6 +1051,18 @@ async function init() {
     e.returnValue = "";
     return "";
   });
+
+  // One channel between this page and its floating window. Same extension, same origin, no
+  // permission - and nothing else listens on it.
+  try {
+    bus = new BroadcastChannel("fpc-rec");
+    bus.onmessage = (e) => {
+      const m = (e && e.data) || {};
+      if (m.type === "stop") requestStop();
+      else if (m.type === "floatReady") postTick();     // answer at once, so its clock is right
+      else if (m.type === "floatAt") saveFloatAt(m);
+    };
+  } catch (_) { bus = null; }
 
   await checkRecovery();
 

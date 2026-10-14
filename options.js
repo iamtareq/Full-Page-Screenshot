@@ -21,7 +21,8 @@ const DEFAULTS = {
   recSystemAudio: true,          // the page's own sound: what a bug report usually needs
   recMic: false,                 // a voice-over is a deliberate choice, not a default
   recFormat: "webm",             // Chrome 155's MP4 muxer crashed a recording tab; WebM cannot
-  recCountdown: true             // three seconds between Share and the first frame
+  recCountdown: true,            // three seconds between Share and the first frame
+  recFloat: true                 // the little "still recording" window
 };
 
 const els = {
@@ -48,6 +49,7 @@ const els = {
   recMic: document.getElementById("recMic"),
   recFormat: document.getElementById("recFormat"),
   recCountdown: document.getElementById("recCountdown"),
+  recFloat: document.getElementById("recFloat"),
   qval: document.getElementById("qval"),
   dval: document.getElementById("dval"),
   status: document.getElementById("status")
@@ -141,6 +143,7 @@ async function load() {
   if (els.recMic) els.recMic.checked = cfg.recMic === true;
   if (els.recFormat) els.recFormat.value = cfg.recFormat === "mp4" ? "mp4" : "webm";
   if (els.recCountdown) els.recCountdown.checked = cfg.recCountdown !== false;
+  if (els.recFloat) els.recFloat.checked = cfg.recFloat !== false;
   try {
     const ru = document.getElementById("redirectUri");
     if (ru && chrome.identity && chrome.identity.getRedirectURL) ru.textContent = chrome.identity.getRedirectURL();
@@ -176,7 +179,8 @@ async function save() {
     recSystemAudio: !(els.recSystemAudio && !els.recSystemAudio.checked),
     recMic: !!(els.recMic && els.recMic.checked),
     recFormat: els.recFormat && els.recFormat.value === "mp4" ? "mp4" : "webm",
-    recCountdown: !(els.recCountdown && !els.recCountdown.checked)
+    recCountdown: !(els.recCountdown && !els.recCountdown.checked),
+    recFloat: !(els.recFloat && !els.recFloat.checked)
   };
   // Turning the feature off should not leave captures sitting in storage.
   if (!settings.recentEnabled) {
