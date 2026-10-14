@@ -17,7 +17,9 @@ const DEFAULTS = {
   driveLinkLabel: false,
   driveLinkAlign: "center",
   driveLinkSize: "",
-  driveLinkMode: "html"
+  driveLinkMode: "html",
+  recSystemAudio: true,          // the page's own sound: what a bug report usually needs
+  recMic: false                  // a voice-over is a deliberate choice, not a default
 };
 
 const els = {
@@ -40,6 +42,8 @@ const els = {
   driveLinkAlign: document.getElementById("driveLinkAlign"),
   driveLinkSize: document.getElementById("driveLinkSize"),
   driveLinkMode: document.getElementById("driveLinkMode"),
+  recSystemAudio: document.getElementById("recSystemAudio"),
+  recMic: document.getElementById("recMic"),
   qval: document.getElementById("qval"),
   dval: document.getElementById("dval"),
   status: document.getElementById("status")
@@ -76,7 +80,21 @@ function reflect() {
   paintTrack(els.jpegQuality);
   paintTrack(els.tileDelay);
   reflectEnv();
+  reflectSound();
   fnamePreview();
+}
+
+// Two switches, four meanings - and one of them (both off) is a silent film, which is worth
+// saying out loud before someone records twenty minutes of it.
+function reflectSound() {
+  const line = document.getElementById("recSound");
+  if (!line || !els.recSystemAudio || !els.recMic) return;
+  const sys = els.recSystemAudio.checked, mic = els.recMic.checked;
+  line.textContent = sys && mic
+    ? "Both are blended into one sound track, because a recording can only carry one."
+    : sys ? "The recording carries the computer's sound, not your voice."
+    : mic ? "The recording carries your voice, not the computer's sound."
+    : "The recording will be silent.";
 }
 
 function fnamePreview() {
@@ -115,6 +133,8 @@ async function load() {
   if (els.driveLinkAlign) els.driveLinkAlign.value = ["", "left", "center", "right"].indexOf(cfg.driveLinkAlign) >= 0 ? cfg.driveLinkAlign : "center";
   if (els.driveLinkSize) els.driveLinkSize.value = cfg.driveLinkSize || "";
   if (els.driveLinkMode) els.driveLinkMode.value = cfg.driveLinkMode === "formula" ? "formula" : "html";
+  if (els.recSystemAudio) els.recSystemAudio.checked = cfg.recSystemAudio !== false;
+  if (els.recMic) els.recMic.checked = cfg.recMic === true;
   try {
     const ru = document.getElementById("redirectUri");
     if (ru && chrome.identity && chrome.identity.getRedirectURL) ru.textContent = chrome.identity.getRedirectURL();
@@ -146,7 +166,9 @@ async function save() {
     driveLinkLabel: !!(els.driveLinkLabel && els.driveLinkLabel.checked),
     driveLinkAlign: els.driveLinkAlign ? els.driveLinkAlign.value : "center",
     driveLinkSize: els.driveLinkSize ? els.driveLinkSize.value.trim() : "",
-    driveLinkMode: els.driveLinkMode ? els.driveLinkMode.value : "html"
+    driveLinkMode: els.driveLinkMode ? els.driveLinkMode.value : "html",
+    recSystemAudio: !(els.recSystemAudio && !els.recSystemAudio.checked),
+    recMic: !!(els.recMic && els.recMic.checked)
   };
   // Turning the feature off should not leave captures sitting in storage.
   if (!settings.recentEnabled) {
@@ -185,6 +207,8 @@ if (copyBtn) copyBtn.addEventListener("click", async () => {
 });
 
 els.infoBar.addEventListener("change", reflectEnv);
+if (els.recSystemAudio) els.recSystemAudio.addEventListener("change", reflectSound);
+if (els.recMic) els.recMic.addEventListener("change", reflectSound);
 els.jpegQuality.addEventListener("input", reflect);
 els.tileDelay.addEventListener("input", reflect);
 els.filenameTemplate.addEventListener("input", fnamePreview);

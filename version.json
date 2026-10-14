@@ -1,4 +1,4 @@
 {
-  "version": "1.6.0",
-  "notes": "Big uploads. A multi-page PDF (or anything over 5 MB) now goes to Drive in chunks instead of one request Google can refuse, and the button counts the upload up in percent instead of sitting on “Uploading…”. A connection that drops, or a sign-in that goes stale half-way, now carries on from where the upload really got to rather than starting again. Nothing changes for an ordinary screenshot: that is still the same single request it always was."
+  "version": "1.7.0",
+  "notes": "Screen recording. The extension can now record the screen, a window or a tab - press Record the screen in the popup. The file saves to Downloads by itself and can go to Drive with the same Click Me link a screenshot uses. Computer sound is on by default and your voice is off; both together are blended into one track. Chrome's own Stop sharing bar stops it as well as the page's own button, the toolbar shows REC while it runs, and Update now will not close a recording without asking. No new permission: Chrome's share picker is the permission."
 }

@@ -28,6 +28,38 @@ document.getElementById("editPic").addEventListener("click", () => {
   window.close();
 });
 
+/* ---- Record the screen ------------------------------------------------------
+ * A tab, not this popup: Chrome's share picker takes focus, and a popup that loses focus
+ * closes - taking the user gesture getDisplayMedia needs with it. One recorder at a time, so
+ * an open one is focused instead of a second being opened: the pages answer through
+ * chrome.extension.getViews, the same way the update warning finds open editors. */
+function recorderView() {
+  let views = [];
+  try { views = chrome.extension.getViews({ type: "tab" }) || []; } catch (_) {}
+  for (const v of views) {
+    try {
+      if (!/\/record\.html$/.test(v.location.pathname)) continue;
+      return v;
+    } catch (_) {}
+  }
+  return null;
+}
+document.getElementById("record").addEventListener("click", () => {
+  const v = recorderView();
+  let tabId = null;
+  try { if (v && typeof v.fpcEditorState === "function") tabId = v.fpcEditorState().tabId; } catch (_) {}
+  if (tabId != null) {
+    // The same two calls the update warning's "Show" uses: neither needs a permission, and
+    // Tab.windowId is never scrubbed.
+    chrome.tabs.update(tabId, { active: true })
+      .then((t) => t && chrome.windows.update(t.windowId, { focused: true }))
+      .catch(() => {});
+  } else {
+    chrome.tabs.create({ url: chrome.runtime.getURL("record.html") });
+  }
+  window.close();
+});
+
 /* ---- "More ways to capture" ------------------------------------------------
  * Collapsed on a fresh profile, and the choice sticks. It lives in storage.local,
  * NOT in the settings object: options.js rebuilds that object from its form fields
@@ -202,7 +234,7 @@ function openEditors() {
   const out = [];
   for (const v of views) {
     try {
-      if (!/\/result\.html$/.test(v.location.pathname)) continue;
+      if (!/\/(result|record)\.html$/.test(v.location.pathname)) continue;
       if (typeof v.fpcEditorState !== "function") { out.push({ view: v, title: "", unknown: true }); continue; }
       const st = v.fpcEditorState();
       if (st.failed || (!st.hasImage && !st.capturing)) continue;   // error page / empty Recent picker

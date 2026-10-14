@@ -220,6 +220,28 @@
     </div>
   </div>
 
+  <h2><span class="em">⏺️</span> Screen recording <span class="tag">NEW</span></h2>
+  <p class="hint">Bug-টা নড়াচড়া করে — screenshot-এ বোঝানো যায় না? Extension-এর icon চেপে <b>Record the screen</b>। Video নিজে থেকেই Downloads-এ save হয়, আর চাইলে screenshot-এর মতোই Drive-এ গিয়ে <b>Click Me</b> link copy হয়ে যায়।</p>
+  <div class="card pad">
+    <ol class="steps">
+      <li><b>Record the screen</b> চাপলে নতুন একটা tab খোলে (popup-এ না, কারণ Chrome-এর picker এলে popup বন্ধ হয়ে যেত)।</li>
+      <li><b>Start recording</b> → Chrome নিজে জিজ্ঞেস করে কী share করবেন: <b>পুরো screen</b>, <b>একটা window</b>, নাকি <b>একটা tab</b>। Share চাপার আগ পর্যন্ত কিছুই record হয় না।</li>
+      <li>Record চলার সময় page-এ সময় ও file-এর size দেখায়। থামানোর দুটো পথ: page-এর <b>Stop recording</b>, অথবা Chrome-এর নিজের <b>“Stop sharing”</b> bar — দুটোতেই file ঠিকঠাক save হয়।</li>
+      <li>থামার পর video-টা ওখানেই চালিয়ে দেখা যায়, তারপর <b>Send to Drive</b> → link clipboard-এ।</li>
+    </ol>
+    <table>
+      <tr><td class="k">শব্দ</td><td class="v">Settings-এ দুটো switch: <b>Record computer sound</b> (default চালু — পাতার নিজের আওয়াজ) আর <b>Record my voice</b> (default বন্ধ — microphone)। দুটোই চালু থাকলে দুটো মিলিয়ে <b>একটাই sound track</b> হয়, কারণ video file একটার বেশি নিতে পারে না। একটা <b>window</b> share করলে Chrome computer sound দেয় না — page-এ তখন সত্যি কথাটাই লেখা থাকে।</td></tr>
+      <tr><td class="k">Microphone</td><td class="v">Voice চালু থাকলে Chrome একবার permission চায় — সেটা <b>আলাদা screen-এ</b> আগেই চাওয়া হয়, যাতে ওই prompt-টা share picker-এর click খেয়ে না ফেলে। একবার Allow দিলেই পরেরবার থেকে আর জিজ্ঞেস করে না।</td></tr>
+      <tr><td class="k">Toolbar-এ REC</td><td class="v">Record চলার সময় extension icon-এ লাল <b>REC</b> লেখা থাকে। মাঝখানে screenshot নিলেও ওটা মুছে যায় না — থামলে নিজে থেকেই চলে যায়।</td></tr>
+      <tr><td class="k">File</td><td class="v"><code>recording-screen-2026-10-14-143207.mp4</code> — MP4 (H.264 + AAC), Chrome/VLC/Drive সবখানে চলে, seek-ও করা যায়। মোটামুটি <b>প্রতি মিনিটে ১০–৩০ MB</b>, কতটা নড়াচড়া তার উপর।</td></tr>
+      <tr><td class="k">Tab বন্ধ করবেন না</td><td class="v">Record শেষ না হওয়া পর্যন্ত video-টা ওই tab-এর ভেতরেই থাকে। বন্ধ করতে গেলে browser জিজ্ঞেস করে, আর Chrome ওই tab-কে ঘুম পাড়াতেও পারে না — তবু <b>আগে Stop, পরে tab বন্ধ</b>। খুব লম্বা হলে ৫০০ MB-তে সতর্ক করে, আর ১.৫ GB বা ১ ঘণ্টায় নিজে থেকেই থামিয়ে save করে ফেলে।</td></tr>
+      <tr><td class="k">Recent-এ থাকে না</td><td class="v">Recent-এর ৩টা ঘর screenshot-এর জন্য; video ওখানে রাখা হয় না। তাই <b>Stop</b> করলেই যে file-টা Downloads-এ যায়, সেটাই আসল copy।</td></tr>
+    </table>
+    <div class="callout">
+      <b>নতুন কোনো permission লাগেনি।</b> Chrome-এর share picker নিজেই অনুমতি — extension আলাদা করে screen বা audio-এর permission চায় না, তাই update নিতে গিয়ে কারও কিছু নতুন করে allow করতে হবে না।
+    </div>
+  </div>
+
   <h2><span class="em">☁️</span> Send to Google Drive <span class="tag">MAIN</span></h2>
   <p class="hint">Editor-এর উপরের toolbar-এ <b>“Send to Drive”</b> button — image upload হয়ে shareable <b>link অটো clipboard-এ copy</b> হয়ে যায়।</p>
   <div class="card pad">
@@ -275,6 +297,8 @@
       <tr><td class="k">Keep recent captures</td><td class="v">শেষ ৩টা capture (দাগসহ) এই PC-তে রাখে, ভুলে tab বন্ধ করলেও ফেরত পাওয়া যায়। default OFF; বন্ধ করলে রাখা সব মুছে যায়</td></tr>
       <tr><td class="k">Hide sticky / fixed elements</td><td class="v">floating header / cookie bar বারবার repeat হওয়া আটকায়</td></tr>
       <tr><td class="k">File name template</td><td class="v">tokens: <code>{title}</code> <code>{date}</code> <code>{time}</code> <code>{host}</code></td></tr>
+      <tr><td class="k">Record computer sound</td><td class="v">Screen recording-এ পাতার নিজের আওয়াজ। default ON</td></tr>
+      <tr><td class="k">Record my voice</td><td class="v">Screen recording-এ microphone (narration)। default OFF</td></tr>
       <tr><td class="k">Target Drive folder ⭐</td><td class="v">আপনার নিজের Drive folder-এর URL/ID (খালি = Drive root)</td></tr>
     </table>
   </div>

@@ -79,12 +79,61 @@ async function getSettings() {
   }
 }
 
+/* ---- "REC": a recording owns the badge until it stops ---- */
+// The badge is one label for the whole browser, and a capture clears it on thirteen different
+// paths - so a screenshot taken while a recording runs would quietly wipe REC. Guard the setter
+// once instead of editing those thirteen.
+let recLive = false;                       // a recorder tab is recording right now
+const REC_TEXT = "REC";
+const REC_COLOR = "#dc2626";
+
 function setBadge(text, color) {
+  if (!text && recLive) { text = REC_TEXT; color = REC_COLOR; }   // a capture must not outrank it
   try {
     chrome.action.setBadgeBackgroundColor({ color: color || "#0d9488" });
     chrome.action.setBadgeText({ text: text || "" });
   } catch (_) {}
 }
+
+// Which tab is recording is kept in session storage, not in this variable alone: the service
+// worker is killed whenever Chrome feels like it, and the recording carries on without it.
+async function setRecording(on, tabId) {
+  recLive = !!on;
+  try {
+    if (recLive) await chrome.storage.session.set({ recTab: tabId == null ? -1 : tabId });
+    else await chrome.storage.session.remove("recTab");
+  } catch (_) {}
+  setBadge(recLive ? REC_TEXT : "", recLive ? REC_COLOR : undefined);
+}
+
+async function recordingTab() {
+  try {
+    const s = await chrome.storage.session.get("recTab");
+    const id = s && s.recTab;
+    if (id == null || id < 0) return null;
+    return await chrome.tabs.get(id).catch(() => null);
+  } catch (_) { return null; }
+}
+
+// Every wake-up: make the badge agree with whether that recorder tab is still there. A tab closed
+// while the worker was asleep would otherwise leave REC on for ever.
+async function sweepRecording() {
+  let stored;
+  try { stored = (await chrome.storage.session.get("recTab")).recTab; } catch (_) { return; }
+  if (stored == null) return;
+  const tab = await recordingTab();
+  if (tab) { recLive = true; setBadge(REC_TEXT, REC_COLOR); }
+  else await setRecording(false);
+}
+sweepRecording();
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  if (!recLive) return;
+  try {
+    const s = await chrome.storage.session.get("recTab");
+    if (s && s.recTab === tabId) await setRecording(false);   // the recording went with the tab
+  } catch (_) {}
+});
 
 async function activeTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -1120,6 +1169,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg && msg.type === "capture") {
     activeTab().then((tab) => runCapture(tab, msg.mode || "full", msg.delay || 0));
     sendResponse({ ok: true });
+    return false;
+  }
+  // The recorder page saying it has started or stopped.
+  if (msg && msg.type === "rec") {
+    setRecording(!!msg.on, sender && sender.tab ? sender.tab.id : null);
+    sendResponse({ ok: true });
+    return false;
+  }
+  // The popup asking whether one is already running, so it can focus that tab instead of
+  // opening a second recorder.
+  if (msg && msg.type === "recTab") {
+    recordingTab().then((tab) => sendResponse({ tabId: tab ? tab.id : null, windowId: tab ? tab.windowId : null }));
+    return true;                            // the answer comes later
   }
   return false;
 });

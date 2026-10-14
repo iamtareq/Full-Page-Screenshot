@@ -369,6 +369,33 @@
     </div>
   </div>
 
+  <div class="eyebrow">Screen recording</div>
+  <div class="card">
+    <div class="row">
+      <div>
+        <label class="rlabel" for="recSystemAudio">Record computer sound</label>
+        <div class="rdesc">The sound the page itself makes &mdash; a video, an alert, a call. Chrome offers this for a whole screen or a single tab; for one <b>window</b> it does not, and the recorder then says the sound is missing rather than pretending.</div>
+      </div>
+      <div class="ctrl">
+        <span class="switch"><input type="checkbox" id="recSystemAudio" /><span class="slider"></span></span>
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label class="rlabel" for="recMic">Record my voice</label>
+        <div class="rdesc">Your microphone, for narrating a bug while you reproduce it. Off by default. Chrome asks for the microphone once, on the recorder page, before the recording starts.</div>
+      </div>
+      <div class="ctrl">
+        <span class="switch"><input type="checkbox" id="recMic" /><span class="slider"></span></span>
+      </div>
+    </div>
+    <div class="row" style="grid-template-columns: 1fr">
+      <div>
+        <div class="rdesc" id="recSound" style="margin-top: 0"></div>
+      </div>
+    </div>
+  </div>
+
   <div class="eyebrow">Privacy</div>
   <div class="card">
     <div class="row">

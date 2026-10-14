@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Screen recording — Full Page Capture</title>
+  <link rel="stylesheet" href="record.css" />
+</head>
+<body data-state="idle">
+  <main class="wrap">
+    <h1><img src="icons/icon32.png" alt="" /> Screen recording</h1>
+    <p class="sub">Record the screen, a window, or one tab. The file saves to Downloads on its own,
+      and can go to Drive with the same “Click Me” link your screenshots use.</p>
+
+    <!-- ---------------- idle ---------------- -->
+    <section class="card" data-when="idle">
+      <div class="pad">
+        <button id="start" class="btn primary big">Start recording</button>
+        <p class="hint">Chrome asks what to share — a whole screen, one window, or one tab.
+          Nothing is recorded until you press Share.</p>
+      </div>
+      <div class="foot">
+        <span class="chip" id="chipSys">Computer sound</span>
+        <span class="chip" id="chipMic">Microphone</span>
+        <a href="options.html" id="toSettings" target="_blank" rel="noopener">Change in Settings</a>
+      </div>
+      <p class="note" id="idleNote" hidden></p>
+    </section>
+
+    <!-- ---------------- the microphone, asked for on its own screen ---------------- -->
+    <section class="card pad" data-when="micAsk">
+      <h2>Allow the microphone first</h2>
+      <p class="hint">Your settings say to record your voice as well. Chrome asks once, for this page
+        only. Doing it here keeps the question out of the way of the screen picker, which needs the
+        click that follows.</p>
+      <div class="btnrow">
+        <button id="micAllow" class="btn primary">Allow microphone</button>
+        <button id="micSkip" class="btn">Record without my voice</button>
+      </div>
+    </section>
+
+    <!-- ---------------- picking ---------------- -->
+    <section class="card pad" data-when="picking">
+      <p class="live" aria-live="polite"><span class="spin" aria-hidden="true"></span> Choose what to share in Chrome’s window…</p>
+      <p class="hint">Pick a screen, a window or a tab and press <b>Share</b>. Press Cancel there and
+        nothing happens at all.</p>
+    </section>
+
+    <!-- ---------------- recording ---------------- -->
+    <section class="card" data-when="recording">
+      <div class="pad">
+        <p class="recline"><span class="dot" aria-hidden="true"></span>
+          <span id="clock" role="timer">00:00</span>
+          <span class="sep" aria-hidden="true">·</span>
+          <span id="size">0.0 MB</span></p>
+        <dl class="facts">
+          <div><dt>Sharing</dt><dd id="factSurface">—</dd></div>
+          <div><dt>Sound</dt><dd id="factAudio">—</dd></div>
+          <div><dt>Saving as</dt><dd id="factFormat">—</dd></div>
+        </dl>
+        <button id="stop" class="btn danger big">Stop recording</button>
+        <p class="hint">Chrome’s own <b>“Stop sharing”</b> bar stops it too — the file is kept
+          either way. Closing this tab is the one thing that loses it.</p>
+        <p class="note warn" id="bigWarn" hidden></p>
+      </div>
+    </section>
+
+    <!-- ---------------- stopped / uploading / uploaded ---------------- -->
+    <section class="card" data-when="stopped uploading uploaded">
+      <div class="pad">
+        <video id="preview" controls playsinline></video>
+        <p class="done" id="savedLine">Saved to Downloads ✓</p>
+        <div class="btnrow">
+          <button id="toDrive" class="btn primary">Send to Drive</button>
+          <button id="saveAgain" class="btn">Save again</button>
+          <button id="again" class="btn">Record another</button>
+        </div>
+
+        <div class="upload" data-when="uploading">
+          <div class="bar"><span id="barFill"></span></div>
+          <p class="hint"><span id="upPct">0%</span> uploaded <span class="sep">·</span>
+            <button id="cancelUp" class="linkbtn">Cancel</button></p>
+        </div>
+
+        <div class="linked" data-when="uploaded">
+          <p class="done" id="linkLine">Link copied ✓</p>
+          <div class="btnrow">
+            <button id="copyLink" class="btn">Copy link again</button>
+            <a id="openDrive" class="btn" href="#" target="_blank" rel="noopener">Open in Drive</a>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden aria-live="polite"></div>
+
+  <script src="config.js"></script>
+  <script src="common.js"></script>
+  <script src="drive.js"></script>
+  <script src="record.js"></script>
+</body>
+</html>
