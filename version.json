@@ -1,4 +1,4 @@
 {
-  "version": "1.8.1",
-  "notes": "Sound that stays. A review of the recorder turned up three ways a recording could end up silent without saying so, and all three are fixed: the nodes that carry the sound are now held in script (an unreferenced one has been collected mid-recording in Chrome before), a page whose audio starts asleep is woken - and says so in the panel if it will not wake - and stopping the share during the three-second countdown now cancels the recording instead of starting it on a dead track. Cancel also reaches a small upload now, where it used to do nothing, and two lines that still claimed a file was in Downloads have been corrected."
+  "version": "1.8.2",
+  "notes": "One line. Pressing Cancel on the countdown printed \"[object PointerEvent]\" instead of \"Cancelled - nothing was recorded\": the button was wired straight to a function that had since grown a message argument, so the click event arrived as the message. Nothing else changed; Escape was always fine."
 }

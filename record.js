@@ -308,7 +308,9 @@ function cancelCountdown(why) {
   clearInterval(countTimer); countTimer = null;
   stopEverything();                     // Chrome stops sharing: nothing was recorded, nothing kept
   setState("idle");
-  toast(why || "Cancelled — nothing was recorded");
+  // Only a sentence is a sentence. Wired straight to a button, this used to be handed the click
+  // event and say so, out loud, in the toast.
+  toast(typeof why === "string" && why ? why : "Cancelled — nothing was recorded");
 }
 
 // For the person who records twenty a day: turn it off by pressing the thing in front of them.
@@ -1144,7 +1146,7 @@ async function init() {
   el("micAllow").addEventListener("click", onMicAllow);
   el("micSkip").addEventListener("click", onMicSkip);
   el("stop").addEventListener("click", requestStop);
-  el("countCancel").addEventListener("click", cancelCountdown);
+  el("countCancel").addEventListener("click", () => cancelCountdown());
   el("showFloat").addEventListener("click", () => openFloat(true));
   el("keepMp4").addEventListener("click", async () => {
     await setFormat("mp4");
