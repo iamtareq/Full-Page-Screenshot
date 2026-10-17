@@ -1,4 +1,4 @@
 {
-  "version": "1.8.2",
-  "notes": "One line. Pressing Cancel on the countdown printed \"[object PointerEvent]\" instead of \"Cancelled - nothing was recorded\": the button was wired straight to a function that had since grown a message argument, so the click event arrived as the message. Nothing else changed; Escape was always fine."
+  "version": "1.9.0",
+  "notes": "A hand for the picture. Zoom in and the capture is bigger than the window; now you can hold the left button and drag it about instead of reaching for a scrollbar. The hand is a tool in the rail (G), Space borrows it while any other tool is selected, and a middle-button drag pans at any time. While the hand is out, nothing is drawn - a pan can never leave a stray mark on a screenshot."
 }

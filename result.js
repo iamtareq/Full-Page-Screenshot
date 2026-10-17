@@ -64,6 +64,8 @@ let recentJobChecked = false; // saveRecent looked for an existing row of this j
 // Annotation state (single-segment images only)
 let annotCanvas = null, annotCtx = null;
 let annotating = false;
+let panning = null;          // { id, x, y, l, t } while the picture is being dragged about
+let spacePan = false;        // Space held: the hand, borrowed from whatever tool is selected
 let annotTool = "select";
 let annotColor = "#D0264A";
 let annotWidth = 8;
@@ -874,7 +876,7 @@ function updateDims() {
   reflectStatus(w, h);
 }
 
-const TOOL_NAMES = { stamp: "Stamp", select: "Select", rect: "Box", ellipse: "Ellipse", arrow: "Arrow",
+const TOOL_NAMES = { stamp: "Stamp", select: "Select", pan: "Hand", rect: "Box", ellipse: "Ellipse", arrow: "Arrow",
   line: "Line", pen: "Pen", highlight: "Highlighter", text: "Text",
   callout: "Callout", step: "Step", blur: "Blur", whiteout: "White out" };
 function reflectToolName(name) { const n = el("toolName"); if (n) n.textContent = name; }
@@ -2329,7 +2331,7 @@ function wireTools() {
           return;
         }
         // single-letter tool picks, like most drawing apps
-        const TOOLKEYS = { v: "select", r: "rect", o: "ellipse", a: "arrow", l: "line", p: "pen", h: "highlight", t: "text", n: "step", b: "blur", c: "callout", s: "stamp", w: "whiteout" };
+        const TOOLKEYS = { v: "select", g: "pan", r: "rect", o: "ellipse", a: "arrow", l: "line", p: "pen", h: "highlight", t: "text", n: "step", b: "blur", c: "callout", s: "stamp", w: "whiteout" };
         const tool = TOOLKEYS[k];
         if (tool) {
           const btn = document.querySelector('.atool[data-tool="' + tool + '"]');
@@ -2754,6 +2756,28 @@ function wireAnnotation() {
   el("aredo").addEventListener("click", annotRedo);
   el("aclear").addEventListener("click", annotClear);
 
+  // The hand, in the capture phase: a press that is a pan must never reach the drawing
+  // handlers below, whichever order the listeners happened to be added in.
+  window.addEventListener("pointerdown", onPanDown, true);
+  window.addEventListener("pointermove", onPanMove, true);
+  window.addEventListener("pointerup", onPanUp, true);
+  window.addEventListener("pointercancel", onPanUp, true);
+  // Space is the hand in every drawing program, and it costs no letter.
+  window.addEventListener("keydown", (e) => {
+    if (e.code !== "Space" || e.repeat || spacePan) return;
+    if (cropping || isTextEntry(e.target)) return;
+    spacePan = true;
+    applyToolCursor();
+    e.preventDefault();          // or the page scrolls, or a focused tool button re-clicks
+  });
+  window.addEventListener("keyup", (e) => {
+    if (e.code !== "Space" || !spacePan) return;
+    spacePan = false;
+    if (!panning) applyToolCursor();
+  });
+  // Alt-tabbing away with Space down would otherwise leave the hand stuck on.
+  window.addEventListener("blur", () => { if (spacePan) { spacePan = false; applyToolCursor(); } });
+
   // Pointer drawing (delegated on window; active only while annotating)
   window.addEventListener("pointerdown", onAnnotDown);
   window.addEventListener("pointermove", onAnnotMove);
@@ -2985,6 +3009,47 @@ function onAnnotDown(e) {
   };
   edgeBegin("annot", e);
 }
+/* ------------------------- The hand -------------------------
+ * A zoomed-in capture is bigger than the window, and reaching for a scrollbar to see the rest of
+ * it is nobody's idea of reading a screenshot. Hold and drag instead - with the Hand tool, with
+ * Space held down under any other tool, or with the middle button at any time.
+ *
+ * It moves the stage's scroll, which is the same thing the scrollbars and the edge auto-scroll
+ * move, so nothing else in the editor has to know this exists. */
+function handMode() { return annotTool === "pan" || spacePan; }
+
+function onPanDown(e) {
+  if (panning || cropping || docBusy || !stage) return;
+  if (e.pointerType === "touch") return;         // a finger already scrolls; leave it alone
+  if (!e.isPrimary) return;
+  const middle = e.button === 1;
+  if (!middle && !(e.button === 0 && handMode())) return;
+  // Only inside the picture area: the toolbar and the rails keep their own clicks.
+  if (typeof stage.contains === "function" && e.target !== stage && !stage.contains(e.target)) return;
+
+  panning = { id: e.pointerId, x: e.clientX, y: e.clientY, l: stage.scrollLeft, t: stage.scrollTop };
+  try { stage.setPointerCapture(e.pointerId); } catch (_) {}
+  applyToolCursor();
+  e.preventDefault();                            // also stops Chrome's middle-click autoscroll
+  e.stopPropagation();                           // the drawing handlers must not see this press
+}
+
+function onPanMove(e) {
+  if (!panning || e.pointerId !== panning.id) return;
+  stage.scrollLeft = panning.l - (e.clientX - panning.x);
+  stage.scrollTop = panning.t - (e.clientY - panning.y);
+  e.preventDefault();
+  e.stopPropagation();
+}
+
+function onPanUp(e) {
+  if (!panning || e.pointerId !== panning.id) return;
+  try { stage.releasePointerCapture(panning.id); } catch (_) {}
+  panning = null;
+  applyToolCursor();
+  e.stopPropagation();
+}
+
 function onAnnotMove(e) {
   edgeTrack(e);
   annotMoveTo(e);
@@ -3297,7 +3362,16 @@ function cancelDrag() {
   drag = null; activePointerId = null;
   applyToolCursor();
 }
-function applyToolCursor() { if (annotCanvas) annotCanvas.style.cursor = (annotTool === "select") ? "default" : ""; }
+function applyToolCursor() {
+  const grab = handMode();
+  if (annotCanvas) {
+    annotCanvas.style.cursor = panning ? "grabbing" : grab ? "grab" : (annotTool === "select") ? "default" : "";
+  }
+  if (stage && stage.classList) {
+    stage.classList.toggle("panready", grab && !panning);
+    stage.classList.toggle("panning", !!panning);
+  }
+}
 function isLight(hex) {
   const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "").trim());
   if (!m) return false;

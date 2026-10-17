@@ -413,6 +413,9 @@ body:has(#stage[hidden]) .arail { display: none; }
    `center` puts the left edge outside the scroll origin and it cannot be
    reached at all. */
 .stage { order: 2; flex: 1; min-width: 0; overflow: auto; padding: 18px; display: flex; justify-content: safe center; align-items: flex-start; }
+/* The hand tool. The cursor sits on the stage so the grey around the picture grabs too. */
+.stage.panready, .stage.panready .canvas-host, .stage.panready canvas { cursor: grab; }
+.stage.panning, .stage.panning .canvas-host, .stage.panning canvas { cursor: grabbing; }
 .canvas-host {
   position: relative; line-height: 0;
   background-color: var(--surface);
