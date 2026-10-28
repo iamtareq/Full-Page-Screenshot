@@ -205,6 +205,26 @@ function fpcPrepare(opts) {
     // hide a fixed/sticky shell that WRAPS it - visibility is inherited, so that would
     // blank the very thing being captured.
     const keep = window.__fpcGridRoot || null;
+    // A sticky element only repeats down the tiles if the DOCUMENT is what it sticks to.
+    // Any ancestor that clips - a grid's overflow:auto scroll body, a header pane's
+    // overflow:hidden - becomes its scrolling box instead, and the window scrolling past
+    // never moves it. Hiding one of those deletes content rather than stopping a repeat:
+    // a DataTables "Grand Total" row and a frozen Action column are sticky cells, and
+    // they are exactly what the bug report was about. Overflow on <body>/<html>
+    // propagates to the viewport, so neither counts as a clipping box - a page that sets
+    // body{overflow-x:hidden} must not keep its own sticky header in every tile.
+    const clipMemo = new Map();
+    const clipped = (n) => {
+      if (!n || n === body || n === de) return false;
+      if (clipMemo.has(n)) return clipMemo.get(n);
+      let cs, r;
+      try { cs = getComputedStyle(n); } catch (_) { cs = null; }
+      if (!cs) r = true;
+      else if (cs.overflowX !== "visible" || cs.overflowY !== "visible") r = true;
+      else r = clipped(n.parentElement);
+      clipMemo.set(n, r);
+      return r;
+    };
     const nodes = body.getElementsByTagName("*");
     const candidates = [body];
     for (let i = 0; i < nodes.length; i++) candidates.push(nodes[i]);
@@ -213,7 +233,8 @@ function fpcPrepare(opts) {
       if (keep && el.contains(keep)) continue;
       let pos;
       try { pos = getComputedStyle(el).position; } catch (_) { continue; }
-      if (pos === "fixed" || pos === "sticky") state.fixed.push(el);
+      if (pos === "fixed") state.fixed.push(el);
+      else if (pos === "sticky" && !clipped(el.parentElement)) state.fixed.push(el);
     }
   }
   window.__fpc = state;
@@ -286,10 +307,11 @@ function fpcRestore() {
   // has to be restored even if the capture never got as far as measuring the page.
   const ex = window.__fpcExpanded;
   if (ex) {
-    for (const [n, maxH, h, oy, ox] of ex) {
+    for (const [n, maxH, h, oy, ox, w, mw] of ex) {
       try {
         n.style.maxHeight = maxH || ""; n.style.height = h || "";
         n.style.overflowY = oy || "";   n.style.overflowX = ox || "";
+        n.style.width = w || "";        n.style.maxWidth = mw || "";
       } catch (_) {}
     }
     delete window.__fpcExpanded;
@@ -429,6 +451,17 @@ function fpcPrepareContainer(opts) {
     sbStyle, fixed: [], saved: null, hidden: false
   };
   if (opts && opts.hideFixed) {
+    // Which box a sticky element rides decides its fate here too. This path scrolls the
+    // container, so a sticky inside it really does repeat and has to go - but one
+    // confined to a pane nested within (a grid's own scroll body, with its total row and
+    // its frozen column) cannot move at all, and hiding it would only delete data.
+    const boxOf = (n) => {
+      for (let p = n.parentElement; p && p !== body && p !== de; p = p.parentElement) {
+        let cs; try { cs = getComputedStyle(p); } catch (_) { return p; }
+        if (cs.overflowX !== "visible" || cs.overflowY !== "visible") return p;
+      }
+      return null;
+    };
     for (let i = 0; i < all.length; i++) {
       const n = all[i];
       // Exclude the container AND its ancestors: hiding a fixed/sticky shell that
@@ -436,7 +469,10 @@ function fpcPrepareContainer(opts) {
       // container too via inherited visibility, blanking every tile after the first.
       if (n.contains(el)) continue;
       let pos; try { pos = getComputedStyle(n).position; } catch (_) { continue; }
-      if (pos === "fixed" || pos === "sticky") state.fixed.push(n);
+      if (pos === "fixed") { state.fixed.push(n); continue; }
+      if (pos !== "sticky") continue;
+      const box = boxOf(n);
+      if (!box || box === el) state.fixed.push(n);
     }
   }
   window.__fpc = state;
@@ -813,19 +849,26 @@ function fpcExpandPicked() {
   const unlock = (n, alsoOverflow) => {
     if (seen.has(n)) return;
     seen.add(n);
-    saved.push([n, n.style.maxHeight, n.style.height, n.style.overflowY, n.style.overflowX]);
+    saved.push([n, n.style.maxHeight, n.style.height, n.style.overflowY, n.style.overflowX,
+                n.style.width, n.style.maxWidth]);
     n.style.maxHeight = "none";
     n.style.height = "auto";
-    if (alsoOverflow) {
-      n.style.overflowY = "visible";
-      if (n.scrollWidth - n.clientWidth < 8) n.style.overflowX = "visible";
-    }
+    // Both axes. Leaving overflowX clamped was the quiet half of the bug: a wide ERP
+    // grid kept its sideways scrollbar, the capture framed the panel, and every column
+    // past the right edge was missing from the picture with nothing to say so.
+    if (alsoOverflow) { n.style.overflowY = "visible"; n.style.overflowX = "visible"; }
   };
   unlock(el, true);
   root.querySelectorAll("*").forEach((n) => {
-    if (n.scrollHeight - n.clientHeight < 40) return;
+    const dy = n.scrollHeight - n.clientHeight, dx = n.scrollWidth - n.clientWidth;
+    if (dy < 40 && dx < 8) return;
     let cs; try { cs = getComputedStyle(n); } catch (_) { return; }
-    if (/^(auto|scroll|overlay)$/.test(cs.overflowY)) unlock(n, true);
+    if (dy >= 40 && /^(auto|scroll|overlay)$/.test(cs.overflowY)) unlock(n, true);
+    // A grid keeps its column headings in a pane of their own, clipped with
+    // overflow:hidden and scrolled in step with the body (DataTables puts them in
+    // .dataTables_scrollHead). Widen the rows without it and the headings stay cut off -
+    // which reads as a worse bug than the one being fixed.
+    else if (dx >= 8 && cs.overflowX !== "visible") unlock(n, true);
   });
   for (let n = el; n; n = n.parentElement) {   // 3 - the height-clamped shells
     unlock(n, false);
@@ -842,13 +885,108 @@ function fpcExpandPicked() {
       const docH = Math.max(de.scrollHeight, document.body.scrollHeight, de.clientHeight);
       const x = Math.max(0, r.left + window.scrollX);
       const y = Math.max(0, r.top + window.scrollY);
+      // Released sideways, the table spills past its wrapper. A block box does not widen
+      // to fit overflow, so the wrapper's border box still measures one panel across and
+      // the region has to come from the scrolling area instead.
+      const rootW = Math.max(r.width, root.scrollWidth);
       resolve({
         x, y,
-        w: Math.max(1, Math.min(r.width, docW - x)),
+        w: Math.max(1, Math.min(rootW, docW - x)),
         h: Math.max(1, Math.min(r.height, docH - y)),
         dpr: window.devicePixelRatio || 1,
         rootTag: root.tagName.toLowerCase() + (root.id ? "#" + root.id : ""),
         unlocked: saved.length
+      });
+    }));
+  });
+}
+
+/* Full page, wide grid. A report table clipped inside its own sideways scroller never
+ * reaches the document: the page is no wider than the panel, so "full page" frames the
+ * panel and every column past its right edge is absent from the picture - silently,
+ * because nobody scrolls a screenshot sideways to check. Release the horizontal clamp,
+ * and only that: the vertical behaviour of the window path is left exactly as it was, so
+ * a grid with ten thousand rows cannot suddenly become a ten-thousand-row capture. The
+ * spill lands in the document's own scrollWidth, which fpcPrepare already measures.
+ * Returns null on every page that has no such grid, which is nearly all of them.
+ * fpcRestore puts the styles back through window.__fpcExpanded. */
+function fpcExpandWideGrid(opts) {
+  const de = document.documentElement, body = document.body;
+  if (!body || window.__fpcExpanded) return null;      // the hand-picked mode already owns the page
+  const minOver = (opts && opts.minOverflow) || 200;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  let el = null, best = 0;
+  const all = body.getElementsByTagName("*");
+  for (let i = 0; i < all.length; i++) {
+    const n = all[i];
+    const over = n.scrollWidth - n.clientWidth;
+    if (over < minOver) continue;                      // cheap layout read first; skips most nodes
+    let cs; try { cs = getComputedStyle(n); } catch (_) { continue; }
+    // Only a box the reader could have scrolled themselves. overflow:hidden is a design
+    // decision - a carousel, a cropped banner, a marquee - and spilling one would
+    // rearrange the page. Clipped panes belonging to the chosen grid are released below.
+    if (!/^(auto|scroll|overlay)$/.test(cs.overflowX)) continue;
+    if (cs.visibility === "hidden" || cs.display === "none") continue;
+    // A data grid, not a sideways widget: a code block, a thumbnail strip and a tab bar
+    // all scroll sideways, and none of them is what "full page" was asked for.
+    let grid; try { grid = n.querySelector("table, [role=grid], [role=table]"); } catch (_) { grid = null; }
+    if (!grid) continue;
+    const r = n.getBoundingClientRect();
+    const visW = Math.min(r.right, vw) - Math.max(r.left, 0);
+    const visH = Math.min(r.bottom, vh) - Math.max(r.top, 0);
+    if (visW < vw * 0.6 || visH < 120) continue;       // must be the page's main content
+    const score = over * visW;
+    if (score > best) { best = score; el = n; }
+  }
+  if (!el) return null;
+
+  // The grid root: climb while the ancestor is the same width as the scroller, so the
+  // heading pane and the pager come along, and stop before the page shell.
+  let root = el;
+  const w0 = el.getBoundingClientRect().width;
+  for (let n = el.parentElement; n && n !== body && n !== de; n = n.parentElement) {
+    if (Math.abs(n.getBoundingClientRect().width - w0) > 8) break;
+    root = n;
+  }
+
+  // Widen each clipping box to the content it is hiding, and touch no overflow at all.
+  // Releasing overflow-x looks like the obvious move and does nothing: CSS computes
+  // "visible" back to "auto" whenever the other axis clips, so a box with overflow:auto
+  // keeps its clamp and the capture comes out exactly as wrong as before, silently. A
+  // width also leaves the vertical side of the box completely alone, which is the promise
+  // this path makes - a grid that scrolls its rows still scrolls them.
+  // The slots carry each inline value as it is NOW, not a blank: DataTables writes its own
+  // inline width and height here, and a restore that cleared them would leave the grid
+  // broken behind us.
+  const saved = [];
+  const seen = new Set();
+  const release = (n) => {
+    if (seen.has(n)) return;
+    seen.add(n);
+    const want = n.scrollWidth;                    // read before anything is written
+    saved.push([n, n.style.maxHeight, n.style.height, n.style.overflowY, n.style.overflowX,
+                n.style.width, n.style.maxWidth]);
+    n.style.maxWidth = "none";
+    n.style.width = want + "px";
+  };
+  release(el);
+  // The column headings live in a pane of their own, clipped with overflow:hidden and
+  // scrolled in step with the body. Widen the rows without it and the headings stay cut.
+  root.querySelectorAll("*").forEach((n) => {
+    if (n.scrollWidth - n.clientWidth < 8) return;
+    let cs; try { cs = getComputedStyle(n); } catch (_) { return; }
+    if (cs.overflowX !== "visible") release(n);
+  });
+  window.__fpcExpanded = saved;
+  window.__fpcGridRoot = root;      // fpcPrepare must not hide anything wrapping this
+
+  return new Promise((resolve) => {
+    // two frames: one for the style writes, one for the grid to relayout
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      resolve({
+        released: saved.length,
+        rootTag: root.tagName.toLowerCase() + (root.id ? "#" + root.id : ""),
+        docW: Math.max(de.scrollWidth, body.scrollWidth, de.clientWidth)
       });
     }));
   });
@@ -1072,6 +1210,11 @@ async function runCapture(tab, mode, delay) {
         containerOffset: { dx: cm.containerDX, dy: cm.containerDY }
       });
     }
+    // A wide report grid clipped inside its own sideways scroller is invisible to the
+    // window path - the document is no wider than the panel it sits in. Open it before
+    // measuring, so the columns hidden to the right are part of what gets captured.
+    // Best effort: a page that will not cooperate still gets the capture it used to.
+    try { await exec(fpcExpandWideGrid, [{}]); } catch (_) {}
     const metrics = await exec(fpcPrepare, [{ hideFixed: settings.hideFixed }]);
     if (!metrics) throw new Error("Could not read the page. Reload the page and try again.");
     const region = { x: 0, y: 0, w: metrics.fullW, h: metrics.fullH };

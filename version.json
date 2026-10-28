@@ -1,4 +1,4 @@
 {
-  "version": "1.9.0",
-  "notes": "A hand for the picture. Zoom in and the capture is bigger than the window; now you can hold the left button and drag it about instead of reaching for a scrollbar. The hand is a tool in the rail (G), Space borrows it while any other tool is selected, and a middle-button drag pans at any time. While the hand is out, nothing is drawn - a pan can never leave a stray mark on a screenshot."
+  "version": "1.9.1",
+  "notes": "Two ways a report came out incomplete. A grid's Grand Total row and its frozen Action column are built from sticky cells, and every sticky thing was hidden after the first screen to stop page headers repeating - so those rows were deleted from the picture, with nothing to say so. Now only what can actually follow the window is hidden: a cell locked inside a grid's own scroll box cannot, and stays. And a table wider than its panel is opened to its full width before a full page capture, so the columns off to the right are in the screenshot instead of waiting behind a scrollbar."
 }
